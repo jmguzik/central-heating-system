@@ -1,0 +1,14 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Central heating water sensors",
+        "description": "Assign climate entities the heating_poddasze or heating_piwnica label to include rooms. The controller starts in Off mode.",
+        "data": {"poddasze_sensor": "Poddasze / Składzik sensor", "piwnica_sensor": "Piwnica / Kotłownia sensor"}
+      }
+    },
+    "error": {"same_sensor": "Select a different water sensor for each zone."},
+    "abort": {"already_configured": "Central heating is already configured."}
+  }
+}
+

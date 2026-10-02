@@ -1,0 +1,16 @@
+# Initial zone membership is seeded once. Future rooms are added through labels.
+zones:
+  - id: poddasze
+    name: Poddasze / Składzik
+    sensor: sensor.skladzik_shellypill_90706945116c_temperatura
+    label: heating_poddasze
+    initial_members:
+      - climate.sypialnia_klimakonwektor
+      - climate.klimakonwektor_biuro_p1
+  - id: piwnica
+    name: Piwnica / Kotłownia
+    sensor: sensor.kotlownia_shellypill_907069462000_temperatura
+    label: heating_piwnica
+    initial_members:
+      - climate.salon_klimakonwektor
+
