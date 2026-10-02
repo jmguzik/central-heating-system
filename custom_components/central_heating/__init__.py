@@ -10,7 +10,7 @@ from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
 
-from .const import CARD_URL, DOMAIN, PLATFORMS
+from .const import CARD_URL, DOMAIN, OVERRIDE_DURATIONS, PLATFORMS
 from .controller import HeatingController
 
 ZONE_SCHEMA = vol.Schema(
@@ -65,6 +65,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     controller = HeatingController(hass, entry, data["zones"])
     await controller.async_load()
     entry.runtime_data = controller
+
+    async def set_room_override(call):
+        await controller.async_apply_override(call.data["entity_id"], call.data["target"], call.data["duration"])
+
+    hass.services.async_register(DOMAIN, "set_room_override", set_room_override, schema=vol.Schema({
+        vol.Required("entity_id"): cv.entity_domain("climate"),
+        vol.Required("target"): vol.All(vol.Coerce(float), vol.Range(min=5, max=35)),
+        vol.Required("duration", default="2 hours"): vol.In(OVERRIDE_DURATIONS),
+    }))
     if not hass.data.get(f"{DOMAIN}_frontend_registered"):
         await hass.http.async_register_static_paths(
             [StaticPathConfig(
@@ -84,6 +93,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """An unloaded controller leaves its fan-coils off."""
     if await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
         await entry.runtime_data.async_stop(turn_off=True)
+        hass.services.async_remove(DOMAIN, "set_room_override")
         return True
     return False
-

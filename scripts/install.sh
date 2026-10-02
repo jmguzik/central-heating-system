@@ -90,7 +90,9 @@ for attempt in {1..60}; do
     fi
     if [[ -n "$access_token" ]] && curl -fsS --max-time 5 -H "Authorization: Bearer $access_token" \
         "$api_url/api/states/sensor.central_heating_status" -o "$backup/runtime-check.json" 2>/dev/null && \
-        jq -e --arg version "$version" '.attributes.version == $version and (.attributes.controls.mode != null) and (.attributes.controls.target != null) and (.attributes.rooms | all(.controls.override != null and .controls.target != null))' "$backup/runtime-check.json" >/dev/null; then
+        jq -e --arg version "$version" '.attributes.version == $version and (.attributes.controls.mode != null) and (.attributes.controls.target != null) and (.attributes.rooms | all(.controls.override != null and .controls.target != null and .controls.override_duration != null and .configuration_url != null and .low_at_or_above != null)) and (.attributes.zones | all(.sensor_status != null and .configuration_url != null))' "$backup/runtime-check.json" >/dev/null && \
+        curl -fsS --max-time 5 -H "Authorization: Bearer $access_token" "$api_url/api/services" 2>/dev/null | \
+        jq -e 'any(.[]; .domain == "central_heating" and .services.set_room_override != null)' >/dev/null; then
         ready=true
         break
     fi

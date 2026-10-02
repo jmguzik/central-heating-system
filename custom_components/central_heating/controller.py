@@ -4,17 +4,18 @@ import asyncio
 from dataclasses import dataclass, replace
 from datetime import timedelta
 import logging
-from time import monotonic
+from time import monotonic, time
 
-from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, EVENT_HOMEASSISTANT_STOP, EVENT_STATE_CHANGED
+from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, EVENT_HOMEASSISTANT_STOP, EVENT_STATE_CHANGED, EVENT_STATE_REPORTED
 from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import area_registry as ar, device_registry as dr, entity_registry as er, label_registry as lr
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.storage import Store
 
-from .const import DOMAIN, RECONCILE_SECONDS, VERSION
-from .logic import Decision, RoomMemory, Settings, decide, room_blocked, temperature, zone_permission
+from .const import DOMAIN, OVERRIDE_DURATIONS, RECONCILE_SECONDS, VERSION
+from .logic import Decision, RoomMemory, Settings, decide, room_blocked, temperature
+from .water import CONFIRM_SECONDS, FAULT_SECONDS, WaterFilter
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -25,6 +26,7 @@ class Room:
     entity_id: str
     name: str
     zone_ids: tuple[str, ...]
+    device_id: str | None = None
 
 
 class HeatingController:
@@ -36,6 +38,9 @@ class HeatingController:
         self.rooms = {}
         self.memories = {}
         self.gates = {key: False for key in self.zones}
+        self.water_filters = {key: WaterFilter() for key in self.zones}
+        self._water_markers = {}
+        self._water_times = {key: {"raw": None, "accepted": None} for key in self.zones}
         self.controls = {}
         self.room_controls = {}
         self.snapshot = {}
@@ -67,7 +72,11 @@ class HeatingController:
                 blocked=raw.get("blocked") is not False,
                 override=raw.get("override") is True,
                 target=value if value is not None and 5 <= value <= 35 else self.settings.target,
+                adaptive_fan="medium" if raw.get("adaptive_fan") == "medium" else "low",
+                override_duration=raw.get("override_duration") if raw.get("override_duration") in OVERRIDE_DURATIONS else "Until cancelled",
+                override_expires_at=temperature(raw.get("override_expires_at")),
             )
+            self.memories[key].expire_override(time())
         for key in self.gates:
             self.gates[key] = data.get("gates", {}).get(key) is True
         self._seeded = data.get("seeded") is True
@@ -99,10 +108,19 @@ class HeatingController:
         @callback
         def state_changed(event):
             entity_id = event.data.get("entity_id")
-            if entity_id in {zone["sensor"] for zone in self.zones.values()} or any(
+            for key, zone in self.zones.items():
+                if zone["sensor"] == entity_id:
+                    self._observe_water(key, event.data.get("new_state"), event.data.get("last_reported"))
+            if entity_id in water_entities or any(
                 room.entity_id == entity_id for room in self.rooms.values()
             ):
                 self.async_request_reconcile()
+
+        water_entities = {zone["sensor"] for zone in self.zones.values()}
+
+        @callback
+        def water_event(data):
+            return data.get("entity_id") in water_entities
 
         @callback
         def registry_changed(event):
@@ -117,9 +135,10 @@ class HeatingController:
             await self.async_stop(turn_off=False)
 
         self._unsubs.extend([
-            self.hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, started),
-            self.hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STOP, stopping),
+            self.hass.bus.async_listen(EVENT_HOMEASSISTANT_STARTED, started),
+            self.hass.bus.async_listen(EVENT_HOMEASSISTANT_STOP, stopping),
             self.hass.bus.async_listen(EVENT_STATE_CHANGED, state_changed),
+            self.hass.bus.async_listen(EVENT_STATE_REPORTED, state_changed, event_filter=water_event),
             self.hass.bus.async_listen("entity_registry_updated", registry_changed),
             self.hass.bus.async_listen("label_registry_updated", registry_changed),
             async_track_time_interval(self.hass, interval_tick, timedelta(seconds=RECONCILE_SECONDS)),
@@ -175,9 +194,34 @@ class HeatingController:
             value = temperature(value)
             if value is None or not 5 <= value <= 35:
                 raise ServiceValidationError("Custom target must be between 5 and 35 °C")
+        elif key == "override_duration":
+            if value not in OVERRIDE_DURATIONS:
+                raise ServiceValidationError("Invalid override duration")
         elif key != "override" or not isinstance(value, bool):
             raise ServiceValidationError("Invalid room setting")
-        setattr(self.memories[room_key], key, value)
+        memory = self.memories[room_key]
+        was_active = memory.override
+        setattr(memory, key, value)
+        if key == "override" and not value:
+            memory.override_expires_at = None
+        elif memory.override and (key == "override_duration" or (key == "override" and not was_active)):
+            seconds = OVERRIDE_DURATIONS[memory.override_duration]
+            memory.override_expires_at = time() + seconds if seconds else None
+        await self._store.async_save(self._serialize())
+        await self.async_reconcile_now()
+
+    async def async_apply_override(self, entity_id, target, duration):
+        """Apply target and deadline together, without intermediate fan decisions."""
+        room = next((room for room in self.rooms.values() if room.entity_id == entity_id), None)
+        target = temperature(target)
+        if room is None or target is None or not 5 <= target <= 35 or duration not in OVERRIDE_DURATIONS:
+            raise ServiceValidationError("Choose a managed thermostat, a valid target, and an override duration")
+        memory = self.memories[room.key]
+        memory.target = target
+        memory.override_duration = duration
+        memory.override = True
+        seconds = OVERRIDE_DURATIONS[duration]
+        memory.override_expires_at = time() + seconds if seconds else None
         await self._store.async_save(self._serialize())
         await self.async_reconcile_now()
 
@@ -230,7 +274,7 @@ class HeatingController:
             area = areas.async_get_area(area_id) if area_id else None
             state = self.hass.states.get(entity.entity_id)
             name = area.name if area else (state.name if state else entity.name or entity.entity_id)
-            rooms[entity.id] = Room(entity.id, entity.entity_id, name, zone_ids)
+            rooms[entity.id] = Room(entity.id, entity.entity_id, name, zone_ids, entity.device_id)
             self.memories.setdefault(entity.id, RoomMemory(target=self.settings.target))
         for key in self.rooms.keys() - rooms.keys():
             await self._turn_off(self.rooms[key].entity_id)
@@ -240,13 +284,24 @@ class HeatingController:
             if added:
                 listener([rooms[key] for key in added])
 
-    def _water(self, zone):
-        state = self.hass.states.get(zone["sensor"])
-        return temperature(state.state, state.attributes.get("unit_of_measurement", "°C")) if state else None
+    def _observe_water(self, key, state, reported=None):
+        reported = reported or (getattr(state, "last_reported", None) if state else None)
+        marker = ("reported", reported.timestamp()) if reported else ("object", id(state))
+        previous = self._water_markers.get(key)
+        if marker == previous or (reported and previous is not None and previous[0] == "reported" and marker[1] < previous[1]):
+            return
+        self._water_markers[key] = marker
+        value = temperature(state.state, state.attributes.get("unit_of_measurement", "°C")) if state else None
+        water = self.water_filters[key]
+        water.observe(value, monotonic(), self.settings)
+        self._water_times[key]["raw"] = reported.timestamp() if reported else time()
+        if not water.issue:
+            self._water_times[key]["accepted"] = self._water_times[key]["raw"]
 
     def _update_gates(self):
         for key, zone in self.zones.items():
-            self.gates[key] = zone_permission(self._water(zone), self.gates[key], self.settings)
+            self._observe_water(key, self.hass.states.get(zone["sensor"]))
+            self.gates[key] = self.water_filters[key].permission(self.gates[key], monotonic(), self.settings)
 
     def _room_temperature(self, state):
         if state is None or state.state in ("unknown", "unavailable"):
@@ -259,17 +314,21 @@ class HeatingController:
         state = self.hass.states.get(room.entity_id)
         current = self._room_temperature(state)
         memory = self.memories[room.key]
+        memory.expire_override(time())
         if self._started:
             memory.blocked = room_blocked(current, memory.blocked, self.settings)
         attributes = state.attributes if state else {}
-        water = self._water(self.zones[room.zone_ids[0]])
-        return decide(
+        water = self.water_filters[room.zone_ids[0]]
+        decision = decide(
             self.settings, memory, current, self.gates[room.zone_ids[0]],
-            water_valid=water is not None and 0 <= water <= 120,
+            water_valid=water.usable(monotonic()),
             membership_valid=len(room.zone_ids) == 1,
             available=state is not None and state.state not in ("unavailable", "unknown"),
             compatible="fan_only" in attributes.get("hvac_modes", []) and {"low", "medium"}.issubset(attributes.get("fan_modes", [])),
         )
+        if self.settings.mode == "Adaptive" and decision.reason in ("Water temperature unavailable", "Water too cold"):
+            return Decision("off", None, water.status(self.gates[room.zone_ids[0]], monotonic(), self.settings))
+        return decision
 
     async def _turn_off(self, entity_id):
         state = self.hass.states.get(entity_id)
@@ -330,19 +389,36 @@ class HeatingController:
             confirmed = actual_mode == decision.hvac_mode and (decision.hvac_mode == "off" or actual_fan == decision.fan_mode)
             room_data.append({
                 "key": room.key, "entity_id": room.entity_id, "name": room.name,
+                "configuration_url": f"/config/devices/device/{room.device_id}" if room.device_id else "/config/entities",
                 "zone_ids": list(room.zone_ids), "temperature": self._room_temperature(state),
-                "effective_target": target, "target_source": "Custom" if memory.override else "Central",
-                "custom_target": memory.target, "override": memory.override, "medium_below": target - 1,
+                "effective_target": target, "target_source": ("Temporary" if memory.override_expires_at else "Custom") if memory.override else "Central",
+                "custom_target": memory.target, "override": memory.override,
+                "override_duration": memory.override_duration, "override_expires_at": memory.override_expires_at,
+                "medium_at_or_below": target - 1.5, "low_at_or_above": target - 0.5,
                 "blocked": memory.blocked, "desired_mode": decision.hvac_mode, "desired_fan": decision.fan_mode,
                 "reported_mode": actual_mode, "reported_fan": actual_fan,
                 "confirmed": confirmed, "reason": decision.reason, "error": self.errors.get(room.key),
                 "controls": dict(self.room_controls.get(room.key, {})),
             })
         labels = lr.async_get(self.hass)
+        registry = er.async_get(self.hass)
         self.snapshot = {
             "version": VERSION, "mode": self.settings.mode, "settings": self.settings.serialize(),
             "controls": dict(self.controls), "startup_fault": self.startup_fault,
-            "zones": [{**zone, "water_temperature": self._water(zone), "allowed": self.gates[key], "label_missing": labels.async_get_label(zone["label"]) is None} for key, zone in self.zones.items()],
+            "zones": [{**zone,
+                "configuration_url": f"/config/devices/device/{entity.device_id}" if (entity := registry.async_get(zone["sensor"])) and entity.device_id else "/config/entities",
+                "water_temperature": self.water_filters[key].accepted,
+                "raw_temperature": self.water_filters[key].raw,
+                "allowed": self.gates[key],
+                "sensor_status": self.water_filters[key].status(self.gates[key], monotonic(), self.settings),
+                "sensor_issue": self.water_filters[key].issue,
+                "sensor_fault": not self.water_filters[key].usable(monotonic()),
+                "raw_reported_at": self._water_times[key]["raw"],
+                "accepted_reported_at": self._water_times[key]["accepted"],
+                "rejected_readings": self.water_filters[key].rejected_readings,
+                "confirm_seconds": CONFIRM_SECONDS, "fault_seconds": FAULT_SECONDS,
+                "label_missing": labels.async_get_label(zone["label"]) is None,
+            } for key, zone in self.zones.items()],
             "rooms": room_data,
             "running_fans": sum(room["reported_mode"] == "fan_only" for room in room_data),
         }

@@ -58,11 +58,9 @@ class HeatingPolicyTests(unittest.TestCase):
         self.decision(24, False)
         self.assertEqual(self.decision(23.8, True).hvac_mode, "off")
 
-    def test_medium_boundary_is_strict(self):
-        self.assertEqual(self.decision(20.99).fan_mode, "medium")
-        self.assertEqual(self.decision(21).fan_mode, "low")
-        self.assertEqual(self.decision(22).fan_mode, "low")
-        self.assertEqual(self.decision(23).fan_mode, "low")
+    def test_half_degree_readings_keep_speed_in_the_deadband(self):
+        for room, expected in [(21, "low"), (20.5, "medium"), (21, "medium"), (20.5, "medium"), (21.5, "low"), (21, "low")]:
+            self.assertEqual(self.decision(room).fan_mode, expected, room)
 
     def test_override_changes_only_its_room(self):
         self.memory.target = 23
@@ -70,7 +68,8 @@ class HeatingPolicyTests(unittest.TestCase):
         self.assertEqual(self.decision(21.5).fan_mode, "medium")
         other = logic.RoomMemory(blocked=False)
         self.assertEqual(logic.decide(self.settings, other, 21.5, True).fan_mode, "low")
-        self.assertEqual(self.decision(22).fan_mode, "low")
+        self.assertEqual(self.decision(22).fan_mode, "medium")
+        self.assertEqual(self.decision(22.5).fan_mode, "low")
 
     def test_central_changes_do_not_replace_override(self):
         self.memory.target = 23
@@ -142,7 +141,22 @@ class HeatingPolicyTests(unittest.TestCase):
         settings.validate()
         self.assertEqual(settings, self.settings)
 
+    def test_speed_memory_survives_restart(self):
+        self.decision(20.5)
+        restored = logic.RoomMemory(**self.memory.serialize())
+        self.assertEqual(logic.decide(self.settings, restored, 21, True).fan_mode, "medium")
+
+    def test_override_expiry_retains_saved_target_and_returns_to_central(self):
+        self.memory.override = True
+        self.memory.target = 23
+        self.memory.override_expires_at = 100
+        self.assertFalse(self.memory.expire_override(99))
+        self.settings.target = 21.5
+        self.assertTrue(self.memory.expire_override(100))
+        self.assertEqual(self.memory.effective_target(self.settings), 21.5)
+        self.assertEqual(self.memory.target, 23)
+        self.assertIsNone(self.memory.override_expires_at)
+
 
 if __name__ == "__main__":
     unittest.main()
-

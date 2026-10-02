@@ -10,10 +10,10 @@ views:
           - type: custom:central-heating-card
             entity: sensor.central_heating_status
           - type: history-graph
-            title: Heating water · last 8 hours
+            title: Accepted heating water · last 8 hours
             hours_to_show: 8
             entities:
-              - entity: sensor.skladzik_shellypill_90706945116c_temperatura
+              - entity: sensor.central_heating_poddasze_water_temperature
                 name: Poddasze / Składzik
-              - entity: sensor.kotlownia_shellypill_907069462000_temperatura
+              - entity: sensor.central_heating_piwnica_water_temperature
                 name: Piwnica / Kotłownia

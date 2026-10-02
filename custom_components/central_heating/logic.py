@@ -58,6 +58,9 @@ class RoomMemory:
     blocked: bool = True
     override: bool = False
     target: float = 22.0
+    adaptive_fan: str = "low"
+    override_duration: str = "2 hours"
+    override_expires_at: float | None = None
 
     def effective_target(self, settings: Settings) -> float:
         value = temperature(self.target)
@@ -67,6 +70,13 @@ class RoomMemory:
 
     def serialize(self) -> dict:
         return asdict(self)
+
+    def expire_override(self, now: float) -> bool:
+        if self.override and self.override_expires_at is not None and now >= self.override_expires_at:
+            self.override = False
+            self.override_expires_at = None
+            return True
+        return False
 
 
 @dataclass(frozen=True)
@@ -128,7 +138,11 @@ def decide(
         return Decision("off", None, "Water temperature unavailable")
     if not water_allowed:
         return Decision("off", None, "Water too cold")
-    if room < memory.effective_target(settings) - 1:
+    target = memory.effective_target(settings)
+    if room <= target - 1.5:
+        memory.adaptive_fan = "medium"
+    elif room >= target - 0.5:
+        memory.adaptive_fan = "low"
+    if memory.adaptive_fan == "medium":
         return Decision("fan_only", "medium", "Cold room · medium")
     return Decision("fan_only", "low", "Near target · low")
-

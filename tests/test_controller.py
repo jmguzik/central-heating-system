@@ -2,11 +2,13 @@
 
 import asyncio
 from copy import deepcopy
+from datetime import UTC, datetime
 import importlib.util
 from pathlib import Path
 import sys
 from types import ModuleType, SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).parents[1] / "custom_components/central_heating"
 
@@ -42,7 +44,7 @@ class Store:
 
 
 module("homeassistant")
-module("homeassistant.const", EVENT_HOMEASSISTANT_STARTED="started", EVENT_HOMEASSISTANT_STOP="stop", EVENT_STATE_CHANGED="state_changed")
+module("homeassistant.const", EVENT_HOMEASSISTANT_STARTED="started", EVENT_HOMEASSISTANT_STOP="stop", EVENT_STATE_CHANGED="state_changed", EVENT_STATE_REPORTED="state_reported")
 def callback(function):
     function._hass_callback = True
     return function
@@ -65,7 +67,7 @@ module("homeassistant.helpers.event", async_track_time_interval=track_interval)
 module("homeassistant.helpers.storage", Store=Store)
 package = module("adapter_under_test")
 package.__path__ = [str(ROOT)]
-for name in ("const", "logic", "controller"):
+for name in ("const", "logic", "water", "controller"):
     spec = importlib.util.spec_from_file_location(f"adapter_under_test.{name}", ROOT / f"{name}.py")
     loaded = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = loaded
@@ -87,7 +89,7 @@ class Registry:
 
     def add(self, entity_id, labels):
         self.entities[entity_id] = SimpleNamespace(
-            id=entity_id, entity_id=entity_id, domain="climate", labels=set(labels),
+            id=entity_id, entity_id=entity_id, domain=entity_id.split(".")[0], labels=set(labels),
             area_id=None, device_id=None, name=entity_id,
         )
 
@@ -106,12 +108,14 @@ class Labels:
 class States:
     def __init__(self):
         self.values = {}
+        self.report = 0
 
     def get(self, entity_id):
         return self.values.get(entity_id)
 
     def water(self, entity_id, value):
-        self.values[entity_id] = SimpleNamespace(state=str(value), attributes={"unit_of_measurement": "°C"}, name=entity_id)
+        self.report += 1
+        self.values[entity_id] = SimpleNamespace(state=str(value), attributes={"unit_of_measurement": "°C"}, name=entity_id, last_reported=datetime.fromtimestamp(self.report, UTC))
 
     def room(self, entity_id, temperature=20, mode="off", speed="auto"):
         self.values[entity_id] = SimpleNamespace(state=mode, name=entity_id, attributes={
@@ -142,6 +146,23 @@ class Services:
             await self.hook(service, data)
 
 
+class Bus:
+    def __init__(self):
+        self.listeners = {}
+
+    def async_listen(self, event_type, action, event_filter=None):
+        self.listeners[event_type] = (action, event_filter)
+        return lambda: self.listeners.pop(event_type, None)
+
+    def async_listen_once(self, *args):
+        return lambda: None
+
+    def fire(self, event_type, data):
+        action, event_filter = self.listeners[event_type]
+        if event_filter is None or event_filter(data):
+            return action(SimpleNamespace(event_type=event_type, data=data))
+
+
 class Hass:
     def __init__(self):
         self.storage = {}
@@ -153,7 +174,7 @@ class Hass:
         self.area_registry = SimpleNamespace(async_get_area=lambda _: None)
         self.config = SimpleNamespace(units=SimpleNamespace(temperature_unit="°C"))
         self.is_running = True
-        self.bus = SimpleNamespace(async_listen=lambda *args: lambda: None, async_listen_once=lambda *args: lambda: None)
+        self.bus = Bus()
 
     def async_create_task(self, coroutine, name):
         return asyncio.create_task(coroutine, name=name)
@@ -161,6 +182,11 @@ class Hass:
 
 class ControllerTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        self.clock = 1000
+        for name, clock in (("monotonic", lambda: self.clock), ("time", lambda: 1800000000 + self.clock)):
+            patcher = patch.object(controller_module, name, clock)
+            patcher.start()
+            self.addCleanup(patcher.stop)
         self.hass = Hass()
         self.hass.entity_registry.add("climate.office", ["heating_upstairs"])
         self.hass.states.room("climate.office")
@@ -194,6 +220,13 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         await self.run_controller()
         await self.controller.async_stop(turn_off=False)
 
+    async def test_shutdown_removes_started_and_stop_listeners_once(self):
+        self.controller.async_start()
+        self.hass.bus.fire("started", {})
+        await self.run_controller()
+        await self.hass.bus.fire("stop", {})
+        self.assertEqual(self.hass.bus.listeners, {})
+
     async def test_reconciliation_is_idempotent(self):
         await self.run_controller()
         await self.run_controller()
@@ -216,6 +249,7 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_target_change_during_command_rechecks_speed(self):
         self.controller.settings.mode = "Adaptive"
+        self.controller.gates["upstairs"] = True
         async def change_target(service, data):
             self.controller.settings.target = 20
         self.hass.services.hook = change_target
@@ -296,6 +330,130 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_set_room("climate.office", "override", False)
         self.assertEqual(self.controller.snapshot["rooms"][0]["effective_target"], 20)
         self.assertEqual(self.controller.memories["climate.office"].target, 23)
+
+    async def test_timed_override_expires_to_changed_central_default(self):
+        await self.controller.async_apply_override("climate.office", 23, "30 minutes")
+        deadline = self.controller.memories["climate.office"].override_expires_at
+        await self.controller.async_set_setting("target", 21.5)
+        self.clock += 1799
+        await self.run_controller()
+        self.assertTrue(self.controller.memories["climate.office"].override)
+        self.clock += 1
+        await self.run_controller()
+        room = self.controller.snapshot["rooms"][0]
+        self.assertEqual(deadline, 1800002800)
+        self.assertFalse(room["override"])
+        self.assertEqual(room["effective_target"], 21.5)
+        self.assertEqual(room["custom_target"], 23)
+
+    async def test_deadline_survives_restart_and_overdue_expiry_is_applied_at_load(self):
+        await self.controller.async_apply_override("climate.office", 23, "1 hour")
+        deadline = self.controller.memories["climate.office"].override_expires_at
+        restored = controller_module.HeatingController(self.hass, self.entry, self.zones)
+        await restored.async_load()
+        self.assertEqual(restored.memories["climate.office"].override_expires_at, deadline)
+        self.clock += 3600
+        overdue = controller_module.HeatingController(self.hass, self.entry, self.zones)
+        await overdue.async_load()
+        self.assertFalse(overdue.memories["climate.office"].override)
+
+    async def test_cancel_clears_deadline_and_permanent_override_has_none(self):
+        await self.controller.async_apply_override("climate.office", 23, "2 hours")
+        await self.controller.async_set_room("climate.office", "override", False)
+        self.assertIsNone(self.controller.memories["climate.office"].override_expires_at)
+        await self.controller.async_apply_override("climate.office", 23, "Until cancelled")
+        self.clock += 100000
+        await self.run_controller()
+        self.assertTrue(self.controller.memories["climate.office"].override)
+
+    async def test_legacy_permanent_overrides_are_preserved(self):
+        self.hass.storage["central_heating"] = {"rooms": {"climate.office": {"override": True, "target": 23}}, "seeded": True}
+        restored = controller_module.HeatingController(self.hass, self.entry, self.zones)
+        await restored.async_load()
+        memory = restored.memories["climate.office"]
+        self.assertTrue(memory.override)
+        self.assertEqual(memory.override_duration, "Until cancelled")
+        self.assertIsNone(memory.override_expires_at)
+
+    async def test_invalid_atomic_override_does_not_change_target_or_deadline(self):
+        await self.controller.async_apply_override("climate.office", 23, "1 hour")
+        before = self.controller.memories["climate.office"].serialize()
+        for entity, target, duration in [("climate.missing", 23, "1 hour"), ("climate.office", 99, "1 hour"), ("climate.office", 23, "3 hours")]:
+            with self.assertRaises(ServiceValidationError):
+                await self.controller.async_apply_override(entity, target, duration)
+        self.assertEqual(self.controller.memories["climate.office"].serialize(), before)
+
+    async def test_expiry_during_fan_command_rechecks_effective_target(self):
+        memory = self.controller.memories["climate.office"]
+        self.controller.settings.mode = "Adaptive"
+        self.controller.settings.target = 20
+        self.controller.gates["upstairs"] = True
+        memory.override = True
+        memory.target = 23
+        memory.override_expires_at = 1800001001
+        async def expire(service, data):
+            self.clock += 1
+        self.hass.services.hook = expire
+        await self.run_controller()
+        self.assertEqual(self.fan_calls(), [("set_fan_mode", "medium"), ("set_fan_mode", "low"), ("set_hvac_mode", "fan_only")])
+
+    async def test_cached_water_reading_is_not_counted_as_new_samples(self):
+        await self.run_controller()
+        for _ in range(5):
+            await self.run_controller()
+        self.assertEqual(list(self.controller.water_filters["upstairs"].samples), [34])
+
+    async def test_warm_water_requires_thirty_seconds_and_85_resets_confirmation(self):
+        self.controller.settings.mode = "Adaptive"
+        await self.run_controller()
+        self.assertEqual(self.fan_calls(), [])
+        self.clock += 29
+        await self.run_controller()
+        self.assertEqual(self.fan_calls(), [])
+        self.hass.states.water("sensor.upstairs", 85)
+        await self.run_controller()
+        self.clock += 60
+        await self.run_controller()
+        self.assertFalse(self.controller.gates["upstairs"])
+        self.hass.states.water("sensor.upstairs", 34)
+        await self.run_controller()
+        self.clock += 30
+        await self.run_controller()
+        self.assertEqual(self.hass.states.get("climate.office").attributes["fan_mode"], "medium")
+
+    async def test_fresh_identical_water_reports_are_observed(self):
+        self.controller.async_start()
+        await self.run_controller()
+        for _ in range(2):
+            self.hass.states.water("sensor.upstairs", 34)
+            self.hass.bus.fire("state_reported", {"entity_id": "sensor.upstairs", "new_state": self.hass.states.get("sensor.upstairs")})
+        await self.run_controller()
+        self.assertEqual(list(self.controller.water_filters["upstairs"].samples), [34, 34, 34])
+        await self.controller.async_stop(turn_off=False)
+
+    async def test_sensor_fault_stops_only_its_adaptive_zone_and_manual_bypasses_it(self):
+        self.hass.entity_registry.add("climate.lounge", ["heating_downstairs"])
+        self.hass.states.room("climate.lounge")
+        self.hass.states.water("sensor.downstairs", 34)
+        self.controller.settings.mode = "Adaptive"
+        self.controller.gates = {"upstairs": True, "downstairs": True}
+        await self.run_controller()
+        self.hass.states.water("sensor.upstairs", 85)
+        await self.run_controller()
+        self.clock += 60
+        await self.run_controller()
+        self.assertEqual(self.hass.states.get("climate.office").state, "off")
+        self.assertEqual(self.hass.states.get("climate.lounge").state, "fan_only")
+        await self.controller.async_set_setting("mode", "Manual")
+        self.assertEqual(self.hass.states.get("climate.office").attributes["fan_mode"], "low")
+
+    async def test_configuration_links_resolve_each_actual_device(self):
+        self.hass.entity_registry.entities["climate.office"].device_id = "thermostat-id"
+        self.hass.entity_registry.add("sensor.upstairs", [])
+        self.hass.entity_registry.entities["sensor.upstairs"].device_id = "shelly-id"
+        await self.run_controller()
+        self.assertEqual(self.controller.snapshot["rooms"][0]["configuration_url"], "/config/devices/device/thermostat-id")
+        self.assertEqual(self.controller.snapshot["zones"][0]["configuration_url"], "/config/devices/device/shelly-id")
 
 
 if __name__ == "__main__":

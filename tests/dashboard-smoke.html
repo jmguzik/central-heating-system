@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Central heating dashboard browser checks</title>
+<style>
+  :root{--primary-text-color:#172331;--secondary-text-color:#546473;--card-background-color:#fff;--secondary-background-color:#f0f4f7;--divider-color:#d3dce3;--primary-color:#176ba0;--text-primary-color:#fff}
+  body{margin:0;background:#e8eef2;font-family:Arial,sans-serif}
+</style>
+<script src="../custom_components/central_heating/www/central-heating-card.js"></script>
+<body><script>
+(async () => {
+  const assert = (condition, message) => { if (!condition) throw new Error(message); };
+  const now = Date.now() / 1000;
+  const room = {
+    key:"bedroom",entity_id:"climate.bedroom",name:"Bedroom <test>",zone_ids:["upstairs"],
+    temperature:21,effective_target:22,custom_target:22,target_source:"Central",override:false,
+    override_duration:"2 hours",override_expires_at:null,medium_at_or_below:20.5,low_at_or_above:21.5,
+    reported_mode:"off",reported_fan:"low",confirmed:true,reason:"Waiting for warm water",
+    configuration_url:"/config/devices/device/thermostat-one",controls:{override:"switch.bedroom_override"},
+  };
+  const model = {
+    mode:"Adaptive",settings:{target:22,water_on:33,water_off:30,room_maximum:24,room_hysteresis:.5},
+    controls:{mode:"select.heating_mode",target:"number.target",water_on:"number.on",water_off:"number.off",room_maximum:"number.maximum",room_hysteresis:"number.gap"},
+    rooms:[room],running_fans:0,
+    zones:[{id:"upstairs",name:"Poddasze",label:"heating_poddasze",water_temperature:22,raw_temperature:22,allowed:false,sensor_status:"Waiting for warm water",raw_reported_at:now,accepted_reported_at:now,configuration_url:"/config/devices/device/shelly-one"},
+      {id:"downstairs",name:"Piwnica",label:"heating_piwnica",water_temperature:22,raw_temperature:22,allowed:false,sensor_status:"Waiting for warm water",configuration_url:"/config/devices/device/shelly-two"}],
+  };
+  const calls = [];
+  const card = document.createElement("central-heating-card");
+  card.setConfig({entity:"sensor.heating"});
+  const hass = {states:{"sensor.heating":{attributes:model}},callService:async (domain, service, data) => {
+    calls.push({domain,service,data});
+    if (service === "set_room_override") {
+      Object.assign(room,{override:true,effective_target:data.target,custom_target:data.target,target_source:"Temporary",override_duration:data.duration,override_expires_at:Date.now()/1000+1800});
+    } else if (domain === "switch") {
+      Object.assign(room,{override:false,effective_target:22,target_source:"Central",override_expires_at:null});
+    } else if (domain === "number") model.settings.target = data.value;
+    card.hass = hass;
+  }};
+  document.body.append(card);
+  card.hass = hass;
+  const find = selector => card.shadowRoot.querySelector(selector);
+  assert(find(".room-head h3").textContent === "Bedroom <test>","Room names must be escaped");
+  assert(!find('[data-panel="advanced"]').open,"Advanced settings start collapsed");
+  for (const link of card.shadowRoot.querySelectorAll(".device-settings")) {
+    assert(!link.closest("details").open,"Device settings must stay inside collapsed details");
+    assert(link.getAttribute("href").startsWith("/config/devices/device/"),"Direct device settings URL");
+  }
+  find("[data-add-room]").click();
+  assert(find('[data-panel="add-room"]').open,"Add room opens instructions");
+  const panel = find('[data-panel="room-bedroom"]');
+  panel.open = true;
+  const target = find("[data-draft]");
+  target.value = "23";
+  target.dispatchEvent(new Event("input"));
+  const duration = find("[data-duration]");
+  duration.value = "30 minutes";
+  duration.dispatchEvent(new Event("change"));
+  target.focus();
+  model.rooms[0].temperature = 21.5;
+  card.hass = hass;
+  assert(find("[data-draft]") === target && target.value === "23","Typing survives HA updates");
+  target.blur();
+  await find("[data-apply]").onclick();
+  assert(calls.at(-1).domain === "central_heating" && calls.at(-1).data.target === 23 && calls.at(-1).data.duration === "30 minutes","Target and duration apply together");
+  assert(find("[data-expires]").textContent.includes("remaining"),"Override countdown is shown");
+  await find("[data-cancel]").onclick();
+  assert(!find("[data-cancel]") && find(".source").textContent === "Central","Cancellation restores inheritance");
+  const central = find('[data-key="target"]');
+  await central.closest(".stepper").querySelector('[data-step="0.5"]').onclick();
+  // Click handlers may initiate an asynchronous native service.
+  await Promise.resolve();
+  assert(calls.at(-1).domain === "number" && calls.at(-1).data.value === 22.5,"Central step buttons use half degrees");
+  model.zones[0].sensor_issue = "Suspect 85°C sensor reset";
+  model.zones[0].raw_temperature = 85;
+  model.zones[0].sensor_fault = true;
+  card.hass = hass;
+  assert(find('[role="alert"]').textContent.includes("85°C"),"Rejected readings are visible");
+  const fail = hass.callService;
+  hass.callService = async () => { throw new Error("Service failed"); };
+  await find('[data-mode="Off"]').onclick();
+  assert(find('[role="alert"]').textContent.includes("Service failed"),"Service errors are visible");
+  hass.callService = fail;
+  assert(card.getBoundingClientRect().width <= innerWidth,"Card fits the viewport");
+  document.body.dataset.result = "pass";
+  document.body.dataset.checks = "12";
+})().catch(error => {
+  document.body.dataset.result = "fail";
+  document.body.dataset.error = error.message;
+});
+</script></body>
+</html>

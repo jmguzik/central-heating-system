@@ -1,0 +1,30 @@
+set_room_override:
+  name: Set room target override
+  description: Apply a room target and expiry together. Expiry restores the current central target.
+  fields:
+    entity_id:
+      name: Thermostat
+      required: true
+      selector:
+        entity:
+          domain: climate
+    target:
+      name: Target temperature
+      required: true
+      selector:
+        number:
+          min: 5
+          max: 35
+          step: 0.5
+          unit_of_measurement: °C
+    duration:
+      name: Override duration
+      required: true
+      default: 2 hours
+      selector:
+        select:
+          options:
+            - 30 minutes
+            - 1 hour
+            - 2 hours
+            - Until cancelled
