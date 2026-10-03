@@ -46,12 +46,14 @@
   card.hass = hass;
   const find = selector => card.shadowRoot.querySelector(selector);
   assert(find("h1").textContent === "Ogrzewanie centralne","Polish is the deployment default");
+  assert(find('.water').textContent.includes("Wygładzona temperatura wody"),"Polish describes temperature smoothing");
   assert(find('.reason').textContent.includes("Oczekiwanie na ciepłą wodę"),"Decision reasons are translated");
   assert(find('.room-temperature').textContent === "21,0°C","Polish decimal formatting");
   const language = find('[data-language]');
   language.value = 'en';
   language.dispatchEvent(new Event('change'));
   assert(find("h1").textContent === "Central heating","English stays available");
+  assert(find('.water').textContent.includes("Smoothed water temperature"),"English describes temperature smoothing");
   const restored = document.createElement("central-heating-card");
   restored.setConfig({entity:"sensor.heating",language:"pl"});
   restored.hass = hass;

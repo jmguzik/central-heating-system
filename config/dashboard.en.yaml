@@ -11,7 +11,7 @@ views:
             entity: sensor.central_heating_status
             language: en
           - type: history-graph
-            title: Accepted heating water · last 8 hours
+            title: Smoothed water temperature · last 8 hours
             hours_to_show: 8
             entities:
               - entity: sensor.central_heating_poddasze_water_temperature

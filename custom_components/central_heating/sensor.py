@@ -62,9 +62,10 @@ class WaterTemperature(HeatingEntity, SensorEntity):
     _attr_device_class = SensorDeviceClass.TEMPERATURE
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    _attr_suggested_display_precision = 1
 
     def __init__(self, controller, key, zone):
-        super().__init__(controller, f"{key}_water_temperature", f"{zone['name']} accepted water", "sensor")
+        super().__init__(controller, f"{key}_water_temperature", f"{zone['name']} smoothed water temperature", "sensor")
         self.zone_key = key
         self._attr_translation_placeholders = {"zone": zone["name"]}
 

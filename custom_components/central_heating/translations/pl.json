@@ -78,7 +78,7 @@
         "name": "Temperatura pokoju"
       },
       "water_temperature": {
-        "name": "{zone} woda po filtracji"
+        "name": "{zone} wygładzona temperatura wody"
       }
     }
   },

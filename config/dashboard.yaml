@@ -11,7 +11,7 @@ views:
             entity: sensor.central_heating_status
             language: pl
           - type: history-graph
-            title: Temperatura wody po filtracji · ostatnie 8 godzin
+            title: Wygładzona temperatura wody · ostatnie 8 godzin
             hours_to_show: 8
             entities:
               - entity: sensor.central_heating_poddasze_water_temperature

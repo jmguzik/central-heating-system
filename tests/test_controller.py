@@ -413,6 +413,44 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
             await self.run_controller()
         self.assertEqual(list(self.controller.water_filters["upstairs"].samples), [34])
 
+    async def test_smoothing_ticks_publish_temperature_without_inventing_sensor_reports(self):
+        for _ in range(3):
+            self.hass.states.water("sensor.upstairs", 22)
+            await self.run_controller()
+            self.clock += 5
+        self.hass.states.water("sensor.upstairs", 21)
+        await self.run_controller()
+        before = deepcopy(self.zone("upstairs"))
+        self.assertEqual(before["water_temperature"], 22)
+        self.clock += 120
+        await self.run_controller()
+        after = self.zone("upstairs")
+        self.assertGreater(after["water_temperature"], 21)
+        self.assertLess(after["water_temperature"], 21.5)
+        self.assertEqual(after["raw_reported_at"], before["raw_reported_at"])
+        self.assertEqual(after["accepted_reported_at"], before["accepted_reported_at"])
+        self.assertEqual(list(self.controller.water_filters["upstairs"].samples), [22, 22, 21])
+
+    async def test_stable_exact_on_report_starts_after_smoothing_then_raw_cold_stops(self):
+        self.controller.settings.mode = "Adaptive"
+        self.hass.states.water("sensor.upstairs", 32)
+        await self.run_controller()
+        self.clock += 5
+        self.hass.states.water("sensor.upstairs", 33)
+        await self.run_controller()
+        self.assertEqual(self.hass.states.get("climate.office").state, "off")
+        self.clock += 360
+        await self.run_controller()
+        self.assertEqual(self.zone("upstairs")["water_temperature"], 33)
+        self.assertEqual(self.hass.states.get("climate.office").state, "off")
+        self.clock += 30
+        await self.run_controller()
+        self.assertEqual(self.hass.states.get("climate.office").state, "fan_only")
+        self.hass.states.water("sensor.upstairs", 30)
+        await self.run_controller()
+        self.assertGreater(self.zone("upstairs")["water_temperature"], 30)
+        self.assertEqual(self.hass.states.get("climate.office").state, "off")
+
     async def test_warm_water_requires_thirty_seconds_and_85_resets_confirmation(self):
         self.controller.settings.mode = "Adaptive"
         await self.run_controller()
@@ -524,7 +562,8 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         await self.run_controller()
         self.assertTrue(self.zone("upstairs")["backup_active"])
         self.assertFalse(self.zone("upstairs")["allowed"])
-        self.assertEqual(self.zone("upstairs")["operating_water_temperature"], 30)
+        self.assertGreater(self.zone("upstairs")["operating_water_temperature"], 30)
+        self.assertEqual(self.zone("downstairs")["raw_temperature"], 30)
         self.assertEqual(self.hass.states.get("climate.office").state, "off")
 
     async def test_backup_uses_its_own_hysteresis_not_failed_primary_latch(self):

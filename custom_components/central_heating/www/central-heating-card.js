@@ -18,7 +18,7 @@ const polish = {
   "Advanced settings": "Ustawienia zaawansowane", "Language": "Język",
   "Water ON": "Woda: próg włączenia", "Water OFF": "Woda: próg wyłączenia",
   "Room maximum": "Limit temperatury pokoju", "Room restart gap": "Spadek do ponownego włączenia",
-  "Restart explanation": "Po osiągnięciu limitu wentylatory mogą ponownie ruszyć przy {temperature}. Bieg pozostaje bez zmian między temperaturą docelową −1,5°C a −0,5°C. Woda jest filtrowana medianą trzech odczytów; włączenie wymaga 30 sekund potwierdzenia. Niedostępny czujnik jest automatycznie zastępowany drugim sprawnym. Błędne odczyty mają 60 sekund okresu ochronnego; potem działa czujnik zapasowy lub strefa zostaje wyłączona.",
+  "Restart explanation": "Po osiągnięciu limitu wentylatory mogą ponownie ruszyć przy {temperature}. Bieg pozostaje bez zmian między temperaturą docelową −1,5°C a −0,5°C. Temperatura wody jest wygładzana medianą trzech odczytów i filtrem o stałej czasowej 60 sekund. Włączenie wymaga 30 sekund potwierdzenia; prawidłowy surowy odczyt na progu wyłączenia lub poniżej zatrzymuje wentylatory od razu. Niedostępny czujnik jest automatycznie zastępowany drugim sprawnym. Błędne odczyty mają 60 sekund okresu ochronnego; potem działa czujnik zapasowy lub strefa zostaje wyłączona.",
   "Backup water": "Woda z czujnika zapasowego", "Backup sensor active": "Sterowanie czujnikiem zapasowym",
   "Backup explanation": "{zone} korzysta z odczytów czujnika {source}. Własny czujnik jest niedostępny lub podaje błędne odczyty. Powrót nastąpi automatycznie po poprawnym odczycie.",
   "No usable water sensor": "Brak sprawnego czujnika wody",
@@ -31,12 +31,12 @@ const polish = {
   "Room appears instruction": "Pokój i jego sterowanie pojawią się automatycznie i odziedziczą temperaturę centralną. Bieżący tryb systemu obowiązuje od razu.",
   "Choose the pipe instruction": "Wybierz strefę według rury zasilającej wodą dany klimakonwektor, a nie według piętra, na którym stoi termostat.",
   "Thermostat requirements": "Termostat musi podawać temperaturę pokoju i obsługiwać fan_only z niskim i średnim biegiem. Etykietę dodaj do samej encji climate.",
-  "Accepted water": "Woda po filtracji", "Zone label missing": "Brak etykiety strefy",
+  "Smoothed water temperature": "Wygładzona temperatura wody", "Zone label missing": "Brak etykiety strefy",
   "Water rule bypassed": "Temperatura wody pomijana", "System off": "System wyłączony",
   "Zone fans off": "Wentylatory tej strefy w trybie adaptacyjnym otrzymują polecenie wyłączenia.",
   "Using the last good reading temporarily.": "Tymczasowo używany jest ostatni poprawny odczyt.",
   "Mode bypasses water": "Tryb {mode} nie korzysta z temperatury wody.",
-  "Sensor readings & details": "Odczyty i szczegóły czujnika", "Raw": "Surowy", "accepted": "po filtracji",
+  "Sensor readings & details": "Odczyty i szczegóły czujnika", "Raw": "Surowy", "smoothed": "wygładzony",
   "Raw report": "Odczyt surowy", "last accepted": "ostatni poprawny",
   "Rejected readings since startup": "Odrzucone odczyty od uruchomienia", "Shelly settings ↗": "Ustawienia Shelly ↗",
   "No rooms instruction": "Brak przypisanych pokoi. Użyj przycisku Dodaj pokój, aby dołączyć termostat.",
@@ -66,7 +66,7 @@ const polish = {
   "Stored settings were invalid; reset to defaults and Off": "Zapisane ustawienia były błędne; przywrócono wartości domyślne i wyłączono system",
 };
 const english = {
-  "Restart explanation": "Rooms restart at {temperature} after reaching the maximum. Fan speed keeps its previous value between target −1.5°C and target −0.5°C. Water uses a median of three reports, with 30 seconds of confirmation before enabling. An unavailable sensor is automatically replaced by the other healthy reader. Invalid readings retain the 60-second grace, then use backup or stop the zone.",
+  "Restart explanation": "Rooms restart at {temperature} after reaching the maximum. Fan speed keeps its previous value between target −1.5°C and target −0.5°C. Water uses a median of three reports and smoothing with a 60-second time constant. Starting requires 30 seconds of confirmation; a valid raw reading at or below the OFF threshold stops fans immediately. An unavailable sensor is automatically replaced by the other healthy reader. Invalid readings retain the 60-second grace, then use backup or stop the zone.",
   "Backup explanation": "{zone} uses readings from {source}. Its own sensor is unavailable or has invalid readings. The primary returns automatically after a valid reading.",
   "Add thermostat instruction": "Add the thermostat through", "Room appears instruction": "The room and its controls appear automatically and inherit the central target. The current system mode applies immediately.",
   "Choose the pipe instruction": "Choose the zone by the water pipe supplying the fan-coil, regardless of the thermostat's floor.",
@@ -228,9 +228,9 @@ class CentralHeatingCard extends HTMLElement {
         <div class="zones">${model.zones.map(zone => {
           const members = rooms.filter(room => room.zone_ids.includes(zone.id));
           const text = zone.label_missing ? "Zone label missing" : model.mode === "Manual" ? "Water rule bypassed" : model.mode === "Off" ? "System off" : zone.sensor_status;
-          return `<section class="zone"><div class="zone-head"><div><h2>${esc(zone.name)}</h2><div class="water">${this._t(zone.backup_active ? "Backup water" : "Accepted water")} <strong>${this._degrees(zone.backup_active ? zone.operating_water_temperature : zone.water_temperature)}</strong></div></div><span class="zone-badge ${zone.allowed ? "ready" : ""}">${esc(this._t(text))}</span></div>
+          return `<section class="zone"><div class="zone-head"><div><h2>${esc(zone.name)}</h2><div class="water">${this._t(zone.backup_active ? "Backup water" : "Smoothed water temperature")} <strong>${this._degrees(zone.backup_active ? zone.operating_water_temperature : zone.water_temperature)}</strong></div></div><span class="zone-badge ${zone.allowed ? "ready" : ""}">${esc(this._t(text))}</span></div>
             ${zone.sensor_issue && !zone.backup_active ? `<p class="alert error" role="alert">${esc(this._t(zone.sensor_issue))}. ${this._t(zone.sensor_fault ? "Zone fans off" : "Using the last good reading temporarily.")}${model.mode !== "Adaptive" ? ` ${this._t("Mode bypasses water", {mode:this._t(model.mode)})}` : ""}</p>` : ""}
-            <details class="diagnostics" data-panel="water-${esc(zone.id)}" ${this._open.has(`water-${zone.id}`) ? "open" : ""}><summary>${this._t("Sensor readings & details")}</summary><p>${this._t("Raw")} ${this._degrees(zone.raw_temperature)} · ${this._t("accepted")} ${this._degrees(zone.water_temperature)}</p>${zone.sensor_issue ? `<p class="error">${esc(this._t(zone.sensor_issue))}</p>` : ""}<p>${this._t("Raw report")} <span data-age="${zone.raw_reported_at || 0}"></span> · ${this._t("last accepted")} <span data-age="${zone.accepted_reported_at || 0}"></span></p><p>${this._t("Rejected readings since startup")}: ${zone.rejected_readings || 0}</p><a class="device-settings" href="${esc(zone.configuration_url || '/config/entities')}">${this._t("Shelly settings ↗")}</a></details>
+            <details class="diagnostics" data-panel="water-${esc(zone.id)}" ${this._open.has(`water-${zone.id}`) ? "open" : ""}><summary>${this._t("Sensor readings & details")}</summary><p>${this._t("Raw")} ${this._degrees(zone.raw_temperature)} · ${this._t("smoothed")} ${this._degrees(zone.water_temperature)}</p>${zone.sensor_issue ? `<p class="error">${esc(this._t(zone.sensor_issue))}</p>` : ""}<p>${this._t("Raw report")} <span data-age="${zone.raw_reported_at || 0}"></span> · ${this._t("last accepted")} <span data-age="${zone.accepted_reported_at || 0}"></span></p><p>${this._t("Rejected readings since startup")}: ${zone.rejected_readings || 0}</p><a class="device-settings" href="${esc(zone.configuration_url || '/config/entities')}">${this._t("Shelly settings ↗")}</a></details>
             <div class="room-list">${members.length ? members.map(room => this._room(room)).join("") : `<div class="empty">${this._t("No rooms instruction")}</div>`}</div></section>`;
         }).join("")}</div>
         <p class="footer">${this._t("Footer")}</p>

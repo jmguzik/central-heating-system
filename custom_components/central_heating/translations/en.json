@@ -78,7 +78,7 @@
         "name": "Room temperature"
       },
       "water_temperature": {
-        "name": "{zone} accepted water"
+        "name": "{zone} smoothed water temperature"
       }
     }
   },

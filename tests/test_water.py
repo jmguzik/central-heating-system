@@ -30,7 +30,7 @@ class WaterFilterTests(unittest.TestCase):
         self.report(21.94, 0)
         self.report(22.31, 5)
         self.assertFalse(self.report(85, 10))
-        self.assertEqual(self.filter.accepted, 22.31)
+        self.assertEqual(self.filter.accepted, 21.94)
         self.assertFalse(self.report(21.94, 12.3))
         self.assertIsNone(self.filter.issue)
         self.assertEqual(self.filter.rejected_readings, 1)
@@ -54,15 +54,19 @@ class WaterFilterTests(unittest.TestCase):
             self.report(22, now)
         self.report(55, 15)
         self.assertFalse(self.report(55, 20))
-        self.assertEqual(self.filter.accepted, 55)
-        self.assertFalse(self.filter.permission(False, 49.9, self.settings))
-        self.assertTrue(self.filter.permission(False, 50, self.settings))
+        self.assertEqual(self.filter.issue, None)
+        self.assertLess(self.filter.accepted, 33)
+        self.assertFalse(self.filter.permission(False, 80, self.settings))
+        self.assertGreater(self.filter.accepted, 33)
+        self.assertFalse(self.filter.permission(False, 109.9, self.settings))
+        self.assertTrue(self.filter.permission(False, 110, self.settings))
 
     def test_slow_approach_to_real_85_and_higher_is_not_banned(self):
         for now, value in enumerate((80, 82, 84, 85, 85, 87)):
             self.report(value, now * 5)
             self.assertIsNone(self.filter.issue, value)
-        self.assertEqual(self.filter.accepted, 85)
+        self.filter.tick(1000)
+        self.assertEqual(self.filter.accepted, 87)
 
     def test_warmup_is_reset_by_a_reading_below_on_threshold(self):
         self.report(34, 0)
@@ -75,8 +79,104 @@ class WaterFilterTests(unittest.TestCase):
         for now in (0, 5, 10):
             self.report(90, now)
         self.assertFalse(self.report(25, 15, previous=True))
-        self.assertEqual(self.filter.accepted, 25)
+        self.assertGreater(self.filter.accepted, 30)
+        self.assertFalse(self.filter.permission(False, 45, self.settings))
         self.assertIsNone(self.filter.issue)
+        self.filter.tick(300)
+        self.assertLess(self.filter.accepted, 30)
+
+    def test_recorded_five_second_cold_dip_is_removed_from_smoothed_reading(self):
+        for now in (0, 5, 10):
+            self.report(22, now)
+        self.report(21.06, 75)
+        self.report(22, 80)
+        self.filter.tick(200)
+        self.assertEqual(self.filter.accepted, 22)
+        self.assertIsNone(self.filter.issue)
+
+    def test_single_sustained_change_settles_without_fresh_reports(self):
+        for now in (0, 5, 10):
+            self.report(22, now)
+        self.report(21, 15)
+        self.filter.tick(75)
+        self.assertEqual(self.filter.accepted, 22)
+        self.filter.tick(300)
+        self.assertLess(self.filter.accepted, 21.05)
+        self.assertGreaterEqual(self.filter.accepted, 21)
+        self.assertEqual(self.filter.accepted_at, 15)
+        self.assertEqual(self.filter.observed_at, 15)
+        self.assertEqual(list(self.filter.samples), [22, 22, 21])
+
+    def test_irregular_ticks_do_not_change_elapsed_time_smoothing(self):
+        for now, value in ((0, 22), (5, 22), (10, 22), (15, 21)):
+            self.report(value, now)
+        other = water.WaterFilter()
+        for now, value in ((0, 22), (5, 22), (10, 22), (15, 21)):
+            other.observe(value, now, self.settings)
+        for now in (31, 74, 81, 112, 139):
+            self.filter.tick(now)
+        other.tick(139)
+        self.assertAlmostEqual(self.filter.accepted, other.accepted)
+        self.assertEqual(self.filter.accepted_at, other.accepted_at)
+
+    def test_rejected_reading_freezes_smoothing_without_extending_grace(self):
+        self.report(40, 0)
+        self.report(42, 5)
+        self.report(42, 10)
+        self.filter.tick(20)
+        self.report(85, 20, previous=True)
+        retained = self.filter.accepted
+        self.filter.tick(50)
+        self.assertEqual(self.filter.accepted, retained)
+        self.assertEqual(self.filter.accepted_at, 10)
+        self.filter.tick(80)
+        self.assertFalse(self.filter.usable(80))
+
+    def test_missing_sensor_recovery_discards_old_hot_samples(self):
+        for now in (0, 5, 10):
+            self.report(40, now)
+        self.report(None, 15, previous=True)
+        self.report(85, 16, previous=True)
+        self.assertFalse(self.report(29, 20, previous=True))
+        self.assertEqual(self.filter.accepted, 29)
+        self.assertEqual(list(self.filter.samples), [29])
+
+    def test_extended_spike_fault_recovery_reseeds_smoothing(self):
+        self.report(22, 0)
+        self.report(85, 5)
+        self.assertFalse(self.report(40, 70))
+        self.assertEqual(self.filter.accepted, 40)
+        self.assertTrue(self.filter.permission(False, 100, self.settings))
+
+    def test_exact_on_threshold_eventually_confirms_with_no_further_reports(self):
+        self.report(32, 0)
+        self.report(33, 5)
+        self.assertFalse(self.filter.permission(False, 65, self.settings))
+        self.assertFalse(self.filter.permission(False, 365, self.settings))
+        self.assertEqual(self.filter.accepted, 33)
+        self.assertTrue(self.filter.permission(False, 395, self.settings))
+
+    def test_real_85_is_checked_against_validated_raw_not_lagging_smoothing(self):
+        self.report(75, 0)
+        for now, value in ((5, 78), (10, 81), (15, 84), (20, 85)):
+            self.report(value, now)
+            self.assertIsNone(self.filter.issue)
+        self.assertLess(self.filter.accepted, 80)
+
+    def test_small_updates_still_smooth_when_water_is_above_off_threshold(self):
+        self.report(40, 0)
+        self.report(41, 5)
+        self.report(41, 10)
+        self.filter.tick(40)
+        self.assertGreater(self.filter.accepted, 40)
+        self.assertLess(self.filter.accepted, 41)
+
+    def test_raw_below_on_threshold_resets_confirmation_even_if_smoothed_is_hot(self):
+        self.report(40, 0)
+        self.report(32, 20)
+        self.assertGreater(self.filter.accepted, 33)
+        self.assertFalse(self.filter.permission(False, 100, self.settings))
+        self.assertIsNone(self.filter.warm_since)
 
     def test_invalid_readings_hold_only_previously_enabled_zone_for_sixty_seconds(self):
         self.report(40, 0)
