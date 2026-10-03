@@ -17,7 +17,11 @@ class HeatingEntity(Entity):
         suffix = room.entity_id.split(".", 1)[1] if room else ""
         object_id = f"central_heating_{suffix + '_' if suffix else ''}{key}"
         self.entity_id = f"{platform}.{object_id}"
-        self._attr_name = name
+        self._attr_translation_key = (
+            "water_temperature" if key.endswith("_water_temperature") else
+            "room_target" if room and key == "target" else
+            "room_status" if room and key == "status" else key
+        )
         self._attr_unique_id = f"{controller.entry.entry_id}_{self.room_key or 'central'}_{key}"
         self._attr_device_info = {
             "identifiers": {(DOMAIN, self.room_key or "central")},

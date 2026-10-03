@@ -1,0 +1,105 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Czujniki wody ogrzewania centralnego",
+        "description": "Aby dołączyć pokoje, przypisz encjom climate etykietę heating_poddasze lub heating_piwnica. Sterownik rozpocznie w trybie wyłączonym.",
+        "data": {
+          "poddasze_sensor": "Czujnik Poddasze / Składzik",
+          "piwnica_sensor": "Czujnik Piwnica / Kotłownia"
+        }
+      }
+    },
+    "error": {
+      "same_sensor": "Wybierz inny czujnik wody dla każdej strefy."
+    },
+    "abort": {
+      "already_configured": "Ogrzewanie centralne jest już skonfigurowane."
+    }
+  },
+  "entity": {
+    "select": {
+      "mode": {
+        "name": "Tryb",
+        "state": {
+          "Off": "Wyłączony",
+          "Manual": "Ręczny",
+          "Adaptive": "Adaptacyjny"
+        }
+      },
+      "override_duration": {
+        "name": "Czas własnej temperatury",
+        "state": {
+          "30 minutes": "30 minut",
+          "1 hour": "1 godzina",
+          "2 hours": "2 godziny",
+          "Until cancelled": "Do anulowania"
+        }
+      }
+    },
+    "number": {
+      "target": {
+        "name": "Temperatura centralna"
+      },
+      "room_target": {
+        "name": "Własna temperatura"
+      },
+      "water_on": {
+        "name": "Próg włączenia przy ciepłej wodzie"
+      },
+      "water_off": {
+        "name": "Próg wyłączenia przy chłodnej wodzie"
+      },
+      "room_maximum": {
+        "name": "Limit temperatury pokoju"
+      },
+      "room_hysteresis": {
+        "name": "Spadek do ponownego włączenia"
+      }
+    },
+    "switch": {
+      "override": {
+        "name": "Używaj własnej temperatury"
+      }
+    },
+    "sensor": {
+      "status": {
+        "name": "Stan",
+        "state": {
+          "Off": "Wyłączony",
+          "Manual": "Ręczny",
+          "Adaptive": "Adaptacyjny"
+        }
+      },
+      "room_status": {
+        "name": "Stan"
+      },
+      "temperature": {
+        "name": "Temperatura pokoju"
+      },
+      "water_temperature": {
+        "name": "{zone} woda po filtracji"
+      }
+    }
+  },
+  "services": {
+    "set_room_override": {
+      "name": "Ustaw własną temperaturę pokoju",
+      "description": "Zastosuj jednocześnie temperaturę pokoju i czas jej obowiązywania.",
+      "fields": {
+        "entity_id": {
+          "name": "Termostat",
+          "description": "Encja climate sterowana przez ogrzewanie centralne."
+        },
+        "target": {
+          "name": "Temperatura dla pokoju",
+          "description": "Żądana temperatura pokoju w °C."
+        },
+        "duration": {
+          "name": "Czas obowiązywania",
+          "description": "Wartości: 30 minutes, 1 hour, 2 hours lub Until cancelled."
+        }
+      }
+    }
+  }
+}

@@ -1,6 +1,6 @@
-title: Ogrzewanie
+title: Central heating
 views:
-  - title: Ogrzewanie centralne
+  - title: Central heating
     path: heating
     icon: mdi:radiator
     type: panel
@@ -9,9 +9,9 @@ views:
         cards:
           - type: custom:central-heating-card
             entity: sensor.central_heating_status
-            language: pl
+            language: en
           - type: history-graph
-            title: Temperatura wody po filtracji · ostatnie 8 godzin
+            title: Accepted heating water · last 8 hours
             hours_to_show: 8
             entities:
               - entity: sensor.central_heating_poddasze_water_temperature

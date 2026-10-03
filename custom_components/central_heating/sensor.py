@@ -66,6 +66,7 @@ class WaterTemperature(HeatingEntity, SensorEntity):
     def __init__(self, controller, key, zone):
         super().__init__(controller, f"{key}_water_temperature", f"{zone['name']} accepted water", "sensor")
         self.zone_key = key
+        self._attr_translation_placeholders = {"zone": zone["name"]}
 
     @property
     def native_value(self):

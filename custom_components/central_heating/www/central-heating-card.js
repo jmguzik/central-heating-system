@@ -1,7 +1,77 @@
-/* Native HA services, room overrides, and water-quality diagnostics. */
+/* Keep globals isolated if an old cached resource and a new module both load. */
+(() => {
 const esc = value => String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-const degrees = value => value == null ? "Unavailable" : `${Number(value).toFixed(1)}°C`;
 const durations = ["30 minutes", "1 hour", "2 hours", "Until cancelled"];
+const polish = {
+  "Central heating": "Ogrzewanie centralne",
+  "Two water zones · individual room control": "Dwie strefy wody · osobne sterowanie pokojami",
+  "Fans running": "Pracujące wentylatory", "Add room": "Dodaj pokój",
+  "Heating mode": "Tryb ogrzewania", "Off": "Wyłączony", "Manual": "Ręczny", "Adaptive": "Adaptacyjny",
+  "low": "Niski", "medium": "Średni", "high": "Wysoki", "Fan": "Wentylator",
+  "unavailable": "niedostępne", "Unavailable": "Niedostępne",
+  "Central target": "Temperatura centralna", "Target": "Temperatura docelowa",
+  "Central": "Centralna", "Custom": "Własna", "Temporary": "Tymczasowa",
+  "All managed fans are requested off.": "Wszystkie sterowane wentylatory otrzymują polecenie wyłączenia.",
+  "Fans run at low speed; the room temperature limit still applies.": "Wentylatory pracują na niskim biegu; limit temperatury pokoju nadal obowiązuje.",
+  "Warm water enables fans. Cold rooms use medium speed, then low as they warm.": "Ciepła woda uruchamia wentylatory. W chłodnych pokojach pracują na średnim biegu, a po ogrzaniu na niskim.",
+  "Targets choose speed; the room maximum stops the fan.": "Temperatura docelowa wybiera bieg; limit temperatury pokoju wyłącza wentylator.",
+  "Advanced settings": "Ustawienia zaawansowane", "Language": "Język",
+  "Water ON": "Woda: próg włączenia", "Water OFF": "Woda: próg wyłączenia",
+  "Room maximum": "Limit temperatury pokoju", "Room restart gap": "Spadek do ponownego włączenia",
+  "Restart explanation": "Po osiągnięciu limitu wentylatory mogą ponownie ruszyć przy {temperature}. Bieg pozostaje bez zmian między temperaturą docelową −1,5°C a −0,5°C. Woda jest filtrowana medianą trzech odczytów; włączenie wymaga 30 sekund potwierdzenia. Błędne odczyty trwające 60 sekund wyłączają daną strefę w trybie adaptacyjnym.",
+  "Add a thermostat to heating": "Dodaj termostat do ogrzewania",
+  "Add thermostat instruction": "Dodaj termostat przez",
+  "Settings → Devices & services → Tuya Local": "Ustawienia → Urządzenia i usługi → Tuya Local",
+  "and assign its room/area.": "i przypisz mu pokój/obszar.",
+  "Open": "Otwórz", "Entities": "Encje",
+  "select its": "wybierz jego encję", "entity, and add exactly one label:": "i dodaj dokładnie jedną etykietę:", "for": "dla",
+  "Room appears instruction": "Pokój i jego sterowanie pojawią się automatycznie i odziedziczą temperaturę centralną. Bieżący tryb systemu obowiązuje od razu.",
+  "Choose the pipe instruction": "Wybierz strefę według rury zasilającej wodą dany klimakonwektor, a nie według piętra, na którym stoi termostat.",
+  "Thermostat requirements": "Termostat musi podawać temperaturę pokoju i obsługiwać fan_only z niskim i średnim biegiem. Etykietę dodaj do samej encji climate.",
+  "Accepted water": "Woda po filtracji", "Zone label missing": "Brak etykiety strefy",
+  "Water rule bypassed": "Temperatura wody pomijana", "System off": "System wyłączony",
+  "Zone fans off": "Wentylatory tej strefy w trybie adaptacyjnym otrzymują polecenie wyłączenia.",
+  "Using the last good reading temporarily.": "Tymczasowo używany jest ostatni poprawny odczyt.",
+  "Mode bypasses water": "Tryb {mode} nie korzysta z temperatury wody.",
+  "Sensor readings & details": "Odczyty i szczegóły czujnika", "Raw": "Surowy", "accepted": "po filtracji",
+  "Raw report": "Odczyt surowy", "last accepted": "ostatni poprawny",
+  "Rejected readings since startup": "Odrzucone odczyty od uruchomienia", "Shelly settings ↗": "Ustawienia Shelly ↗",
+  "No rooms instruction": "Brak przypisanych pokoi. Użyj przycisku Dodaj pokój, aby dołączyć termostat.",
+  "Footer": "Po zakończeniu odliczania tymczasowa temperatura wraca do bieżącej wartości centralnej. Limit temperatury pokoju i tryb wyłączony zawsze mają pierwszeństwo.",
+  "awaiting device confirmation": "oczekiwanie na potwierdzenie urządzenia",
+  "Until cancelled": "Do anulowania", "Temporary override": "Tymczasowa temperatura", "Custom target": "Własna temperatura",
+  "Cancel": "Anuluj", "Change override & details": "Zmień temperaturę i szczegóły", "Override target & details": "Własna temperatura i szczegóły",
+  "Room target": "Temperatura dla pokoju", "Duration": "Czas obowiązywania", "Override duration for": "Czas własnej temperatury dla",
+  "30 minutes": "30 minut", "1 hour": "1 godzina", "2 hours": "2 godziny",
+  "Apply / restart timer": "Zastosuj / rozpocznij odliczanie", "Apply override": "Zastosuj własną temperaturę",
+  "Medium": "Średni", "Thermostat settings ↗": "Ustawienia termostatu ↗",
+  "Decrease": "Zmniejsz", "Increase": "Zwiększ",
+  "Starting": "Ogrzewanie centralne uruchamia się. Jeśli ten komunikat nie znika, sprawdź integrację w Ustawieniach.",
+  "Select the central heating status entity": "Wybierz encję stanu ogrzewania centralnego",
+  "Ending · restoring central target": "Koniec · powrót do temperatury centralnej",
+  "{time} remaining": "Pozostało: {time}", "{time} ago": "{time} temu",
+  "Thermostat unavailable": "Termostat niedostępny", "Room temperature unavailable": "Temperatura pokoju niedostępna",
+  "Room limit reached": "Osiągnięto limit temperatury pokoju", "Unsupported thermostat fan modes": "Termostat nie obsługuje wymaganych biegów",
+  "Manual · low": "Tryb ręczny · niski bieg", "Water temperature unavailable": "Temperatura wody niedostępna",
+  "Water too cold": "Woda zbyt chłodna", "Cold room · medium": "Chłodny pokój · średni bieg",
+  "Near target · low": "Blisko temperatury docelowej · niski bieg", "Water sensor unavailable": "Czujnik wody niedostępny",
+  "Suspect 85°C sensor reset": "Podejrzany odczyt 85°C po resecie czujnika", "Isolated temperature spike": "Pojedynczy skok temperatury",
+  "Sensor fault": "Błąd czujnika", "Reading rejected · last good retained": "Odczyt odrzucony · zachowano ostatni poprawny",
+  "Water ready": "Woda wystarczająco ciepła", "Confirming warm water": "Potwierdzanie temperatury wody",
+  "Waiting for warm water": "Oczekiwanie na ciepłą wodę", "Initializing": "Uruchamianie",
+  "Conflicting zone labels": "Sprzeczne etykiety stref", "Device command timed out": "Upłynął czas oczekiwania na polecenie urządzenia",
+  "Stored settings were invalid; reset to defaults and Off": "Zapisane ustawienia były błędne; przywrócono wartości domyślne i wyłączono system",
+};
+const english = {
+  "Restart explanation": "Rooms restart at {temperature} after reaching the maximum. Fan speed keeps its previous value between target −1.5°C and target −0.5°C. Water uses a median of three reports, with 30 seconds of confirmation before enabling; persistent invalid readings stop the affected Adaptive zone after 60 seconds.",
+  "Add thermostat instruction": "Add the thermostat through", "Room appears instruction": "The room and its controls appear automatically and inherit the central target. The current system mode applies immediately.",
+  "Choose the pipe instruction": "Choose the zone by the water pipe supplying the fan-coil, regardless of the thermostat's floor.",
+  "Thermostat requirements": "The thermostat must report room temperature and support fan_only with low and medium speeds. Apply the label to the climate entity itself.",
+  "Zone fans off": "Adaptive fans in this zone are requested off.", "Mode bypasses water": "{mode} mode does not use water permission.",
+  "No rooms instruction": "No rooms assigned. Use Add room to connect a thermostat.",
+  "Footer": "Temporary overrides return to the current central target when their timer ends. The room limit and Off mode always take priority.",
+  "Starting": "Central heating is starting. If this persists, check the integration in Settings.",
+};
 
 class CentralHeatingCard extends HTMLElement {
   constructor() {
@@ -12,13 +82,16 @@ class CentralHeatingCard extends HTMLElement {
   }
 
   setConfig(config) {
-    if (!config.entity) throw new Error("Select the central heating status entity");
     this._config = config;
+    if (config.language && !["pl", "en"].includes(config.language)) throw new Error("Supported languages: pl, en");
+    try { this._language = localStorage.getItem(`central-heating-language:${config.entity}`); } catch (_) { /* WebViews may restrict storage. */ }
+    if (!["pl", "en"].includes(this._language)) this._language = config.language || "pl";
+    if (!config.entity) throw new Error(this._t("Select the central heating status entity"));
     if (!this.shadowRoot) this.attachShadow({mode: "open"});
     this._render();
   }
 
-  connectedCallback() { this._timer = setInterval(() => this._clock(), 1000); }
+  connectedCallback() { clearInterval(this._timer); this._timer = setInterval(() => this._clock(), 1000); }
   disconnectedCallback() { clearInterval(this._timer); }
 
   set hass(hass) {
@@ -30,6 +103,15 @@ class CentralHeatingCard extends HTMLElement {
   }
 
   getCardSize() { return 12; }
+
+  _t(key, values = {}) {
+    const text = (this._language === "pl" ? polish[key] : english[key]) || english[key] || key || "";
+    return text.replace(/\{(\w+)\}/g, (_, name) => values[name] ?? "");
+  }
+
+  _degrees(value) {
+    return value == null || !Number.isFinite(Number(value)) ? this._t("Unavailable") : `${new Intl.NumberFormat(this._language, {minimumFractionDigits:1, maximumFractionDigits:1}).format(Number(value))}°C`;
+  }
 
   async _call(domain, service, data) {
     if (this._pending) return false;
@@ -52,9 +134,9 @@ class CentralHeatingCard extends HTMLElement {
   _number(key, label, value, minimum, maximum, step, entity, draft = false) {
     const disabled = this._pending || (!draft && !entity);
     return `<label class="setting"><span>${esc(label)}</span><div class="stepper">
-      <button type="button" data-step="-${step}" aria-label="Decrease ${esc(label)}" ${disabled ? "disabled" : ""}>−</button>
+      <button type="button" data-step="-${step}" aria-label="${this._t("Decrease")} ${esc(label)}" ${disabled ? "disabled" : ""}>−</button>
       <input type="number" aria-label="${esc(label)}" data-number="${esc(entity || "")}" data-key="${esc(key)}" ${draft ? 'data-draft="true"' : ""} min="${minimum}" max="${maximum}" step="${step}" value="${esc(value)}" ${disabled ? "disabled" : ""}>
-      <button type="button" data-step="${step}" aria-label="Increase ${esc(label)}" ${disabled ? "disabled" : ""}>+</button><span>°C</span>
+      <button type="button" data-step="${step}" aria-label="${this._t("Increase")} ${esc(label)}" ${disabled ? "disabled" : ""}>+</button><span>°C</span>
     </div></label>`;
   }
 
@@ -62,23 +144,23 @@ class CentralHeatingCard extends HTMLElement {
     const fault = room.error || !room.confirmed || room.reported_mode === "unavailable";
     const speed = room.reported_mode === "off" ? "Off" : room.reported_mode === "fan_only" ? room.reported_fan || "Fan" : room.reported_mode;
     const draft = this._drafts.get(room.key) || {target: room.custom_target, duration: room.override ? room.override_duration : "2 hours"};
-    const expiry = room.override_expires_at ? `<span data-expires="${room.override_expires_at}"></span>` : "Until cancelled";
+    const expiry = room.override_expires_at ? `<span data-expires="${room.override_expires_at}"></span>` : this._t("Until cancelled");
     return `<article class="room ${fault ? "unconfirmed" : ""}" data-room="${esc(room.key)}">
-      <div class="room-head"><h3>${esc(room.name)}</h3><span class="pill ${room.reported_mode === "fan_only" ? "running" : ""}">${esc(speed)}</span></div>
-      <div class="room-temperature">${degrees(room.temperature)}</div>
-      <div class="target-summary">Target <strong>${degrees(room.effective_target)}</strong><span class="source">${esc(room.target_source)}</span></div>
-      <p class="reason">${esc(room.reason)}${!room.confirmed ? " · awaiting device confirmation" : ""}</p>
-      ${room.error ? `<p class="error" role="alert">${esc(room.error)}</p>` : ""}
-      ${room.override ? `<div class="override-active"><span>${room.override_expires_at ? "Temporary override" : "Custom target"} · ${expiry}</span><button type="button" data-cancel="${esc(room.controls?.override || "")}" ${this._pending ? "disabled" : ""}>Cancel</button></div>` : ""}
+      <div class="room-head"><h3>${esc(room.name)}</h3><span class="pill ${room.reported_mode === "fan_only" ? "running" : ""}">${esc(this._t(speed))}</span></div>
+      <div class="room-temperature">${this._degrees(room.temperature)}</div>
+      <div class="target-summary">${this._t("Target")} <strong>${this._degrees(room.effective_target)}</strong><span class="source">${esc(this._t(room.target_source))}</span></div>
+      <p class="reason">${esc(this._t(room.reason))}${!room.confirmed ? ` · ${this._t("awaiting device confirmation")}` : ""}</p>
+      ${room.error ? `<p class="error" role="alert">${esc(this._t(room.error))}</p>` : ""}
+      ${room.override ? `<div class="override-active"><span>${this._t(room.override_expires_at ? "Temporary override" : "Custom target")} · ${expiry}</span><button type="button" data-cancel="${esc(room.controls?.override || "")}" ${this._pending ? "disabled" : ""}>${this._t("Cancel")}</button></div>` : ""}
       <details data-panel="room-${esc(room.key)}" ${this._open.has(`room-${room.key}`) ? "open" : ""}>
-        <summary>${room.override ? "Change override & details" : "Override target & details"}</summary>
+        <summary>${this._t(room.override ? "Change override & details" : "Override target & details")}</summary>
         <div class="override-form">
-          ${this._number("room_target", "Room target", draft.target, 5, 35, 0.5, null, true)}
-          <label class="setting"><span>Duration</span><select data-duration aria-label="Override duration for ${esc(room.name)}" ${this._pending ? "disabled" : ""}>${durations.map(duration => `<option ${duration === draft.duration ? "selected" : ""}>${duration}</option>`).join("")}</select></label>
-          <button class="primary" type="button" data-apply ${this._pending ? "disabled" : ""}>${room.override ? "Apply / restart timer" : "Apply override"}</button>
+          ${this._number("room_target", this._t("Room target"), draft.target, 5, 35, 0.5, null, true)}
+          <label class="setting"><span>${this._t("Duration")}</span><select data-duration aria-label="${this._t("Override duration for")} ${esc(room.name)}" ${this._pending ? "disabled" : ""}>${durations.map(duration => `<option value="${duration}" ${duration === draft.duration ? "selected" : ""}>${this._t(duration)}</option>`).join("")}</select></label>
+          <button class="primary" type="button" data-apply ${this._pending ? "disabled" : ""}>${this._t(room.override ? "Apply / restart timer" : "Apply override")}</button>
         </div>
-        <p class="small thresholds">Medium ≤${degrees(room.medium_at_or_below)} · low ≥${degrees(room.low_at_or_above)}</p>
-        <a class="device-settings" href="${esc(room.configuration_url || '/config/entities')}">Thermostat settings ↗</a>
+        <p class="small thresholds">${this._t("Medium")} ≤${this._degrees(room.medium_at_or_below)} · ${this._t("low")} ≥${this._degrees(room.low_at_or_above)}</p>
+        <a class="device-settings" href="${esc(room.configuration_url || '/config/entities')}">${this._t("Thermostat settings ↗")}</a>
       </details>
     </article>`;
   }
@@ -88,7 +170,7 @@ class CentralHeatingCard extends HTMLElement {
     if (!force && this.shadowRoot.activeElement?.matches('input, select')) return;
     const model = this._hass?.states[this._config.entity]?.attributes;
     if (!model?.settings || !model?.zones) {
-      this.shadowRoot.innerHTML = '<ha-card><div style="padding:24px">Central heating is starting. If this persists, check the integration in Settings.</div></ha-card>';
+      this.shadowRoot.innerHTML = `<ha-card><div style="padding:24px">${this._t("Starting")}</div></ha-card>`;
       return;
     }
     const settings = model.settings;
@@ -111,45 +193,51 @@ class CentralHeatingCard extends HTMLElement {
         details{margin-top:14px}summary{min-height:36px;padding:8px 0;font-size:13px;font-weight:600}.settings{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;background:var(--secondary-background-color);border-radius:10px;padding:16px}.settings .small{grid-column:1/-1}
         .zones{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px;margin-top:22px}.zone{min-width:0}.zone-head{margin-bottom:12px;align-items:flex-start;flex-wrap:wrap}.water{margin-top:6px;font-size:15px}.zone-badge,.pill,.source{font-size:12px;border-radius:20px;padding:6px 10px;background:var(--secondary-background-color)}.ready,.running{color:var(--success-color,#2e7d32);background:color-mix(in srgb,var(--success-color,#2e7d32) 12%,transparent)}
         .room-list{display:grid;gap:12px}.room{border:1px solid var(--divider-color);border-radius:12px;padding:18px}.room-temperature{font-size:38px;font-weight:650;margin:8px 0}.target-summary{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:14px}.reason{margin-top:10px}.thresholds{margin-top:12px;font-size:12px}
-        .override-active{margin-top:14px;border-radius:8px;background:var(--secondary-background-color);padding:9px;font-size:12px;flex-wrap:wrap}.override-active button{min-height:36px;padding:5px 10px}.override-form{display:grid;grid-template-columns:1fr 1fr;gap:12px}.override-form .primary{grid-column:1/-1}
+        .override-active{margin-top:14px;border-radius:8px;background:var(--secondary-background-color);padding:9px;font-size:12px;flex-wrap:wrap}.override-active button{min-height:36px;padding:5px 10px}.override-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.override-form .primary{grid-column:1/-1}.setting{min-width:0}select{min-width:0}
         .diagnostics{background:var(--secondary-background-color);padding:10px 12px;border-radius:9px;margin-bottom:12px}.diagnostics p{font-size:12px;line-height:1.7}.alert{border-left:4px solid var(--error-color,#b3261e);padding:10px 12px;margin:12px 0;background:var(--secondary-background-color)}.error{color:var(--error-color,#b3261e);font-size:13px}.unconfirmed{border-color:var(--warning-color,#b26a00)}
         .guide{padding:14px;background:var(--secondary-background-color);border-radius:10px;font-size:14px;line-height:1.7}.guide ol{padding-left:22px}.guide code{white-space:normal;overflow-wrap:anywhere}a{color:var(--primary-color)}.device-settings{display:inline-block;font-size:12px;color:var(--secondary-text-color);margin-top:10px;padding:6px 0}.empty{padding:18px;font-size:13px;border:1px dashed var(--divider-color);border-radius:9px}.footer{margin-top:20px;font-size:12px;color:var(--secondary-text-color)}
         @media(max-width:800px){.zones{grid-template-columns:1fr}.hero{align-items:flex-start}.hero-actions{justify-content:flex-end}ha-card{padding:20px}}
         @media(max-width:480px){ha-card{padding:16px;margin:4px auto}.hero{display:block}h1{font-size:24px}.hero-actions{justify-content:flex-start;margin-top:12px}.main-controls{display:block}.modes{margin-bottom:14px}.modes button{flex:1;min-width:0}.settings,.override-form{grid-template-columns:1fr}.room{padding:14px}.settings{padding:12px}}
       </style>
-      <ha-card aria-busy="${this._pending}">
-        <div class="hero"><div><h1>Central heating</h1><p class="subtitle">Two water zones · individual room control</p></div><div class="hero-actions"><span class="count">${model.running_fans || 0} / ${rooms.length} fans running</span><button type="button" data-add-room>Add room</button></div></div>
+      <ha-card aria-busy="${this._pending}" lang="${this._language}">
+        <div class="hero"><div><h1>${this._t("Central heating")}</h1><p class="subtitle">${this._t("Two water zones · individual room control")}</p></div><div class="hero-actions"><span class="count">${this._t("Fans running")}: ${model.running_fans || 0} / ${rooms.length}</span><button type="button" data-add-room>${this._t("Add room")}</button></div></div>
         ${this._error ? `<p class="error alert" role="alert">${esc(this._error)}</p>` : ""}
-        ${model.startup_fault ? `<p class="error alert" role="alert">${esc(model.startup_fault)}</p>` : ""}
-        <div class="main-controls"><div class="modes" role="group" aria-label="Heating mode">${["Off", "Manual", "Adaptive"].map(mode => `<button type="button" data-mode="${mode}" class="${model.mode === mode ? "active" : ""}" aria-pressed="${model.mode === mode}" ${this._pending ? "disabled" : ""}>${mode}</button>`).join("")}</div>${this._number("target", "Central target", settings.target, 5, 35, 0.5, controls.target)}</div>
-        <p class="explanation">${model.mode === "Off" ? "All managed fans are requested off." : model.mode === "Manual" ? "Fans run at low speed; the room temperature limit still applies." : "Warm water enables fans. Cold rooms use medium speed, then low as they warm."} Targets choose speed; the room maximum stops the fan.</p>
-        <details data-panel="advanced" ${this._open.has("advanced") ? "open" : ""}><summary>Advanced settings</summary><div class="settings">
-          ${this._number("water_on", "Water ON", settings.water_on, 0, 100, 0.5, controls.water_on)}
-          ${this._number("water_off", "Water OFF", settings.water_off, 0, 100, 0.5, controls.water_off)}
-          ${this._number("room_maximum", "Room maximum", settings.room_maximum, 5, 35, 0.5, controls.room_maximum)}
-          ${this._number("room_hysteresis", "Room restart gap", settings.room_hysteresis, 0.5, 5, 0.5, controls.room_hysteresis)}
-          <p class="small">Rooms restart at ${degrees(settings.room_maximum - settings.room_hysteresis)} after reaching the maximum. Fan speed keeps its previous value between target −1.5°C and target −0.5°C. Water uses a median of three reports, with 30 seconds of confirmation before enabling; persistent invalid readings stop the affected Adaptive zone after 60 seconds.</p>
+        ${model.startup_fault ? `<p class="error alert" role="alert">${esc(this._t(model.startup_fault))}</p>` : ""}
+        <div class="main-controls"><div class="modes" role="group" aria-label="${this._t("Heating mode")}">${["Off", "Manual", "Adaptive"].map(mode => `<button type="button" data-mode="${mode}" class="${model.mode === mode ? "active" : ""}" aria-pressed="${model.mode === mode}" ${this._pending ? "disabled" : ""}>${this._t(mode)}</button>`).join("")}</div>${this._number("target", this._t("Central target"), settings.target, 5, 35, 0.5, controls.target)}</div>
+        <p class="explanation">${this._t(model.mode === "Off" ? "All managed fans are requested off." : model.mode === "Manual" ? "Fans run at low speed; the room temperature limit still applies." : "Warm water enables fans. Cold rooms use medium speed, then low as they warm.")} ${this._t("Targets choose speed; the room maximum stops the fan.")}</p>
+        <details data-panel="advanced" ${this._open.has("advanced") ? "open" : ""}><summary>${this._t("Advanced settings")}</summary><div class="settings">
+          <label class="setting"><span>${this._t("Language")}</span><select data-language aria-label="${this._t("Language")}"><option value="pl" ${this._language === "pl" ? "selected" : ""}>Polski</option><option value="en" ${this._language === "en" ? "selected" : ""}>English</option></select></label>
+          ${this._number("water_on", this._t("Water ON"), settings.water_on, 0, 100, 0.5, controls.water_on)}
+          ${this._number("water_off", this._t("Water OFF"), settings.water_off, 0, 100, 0.5, controls.water_off)}
+          ${this._number("room_maximum", this._t("Room maximum"), settings.room_maximum, 5, 35, 0.5, controls.room_maximum)}
+          ${this._number("room_hysteresis", this._t("Room restart gap"), settings.room_hysteresis, 0.5, 5, 0.5, controls.room_hysteresis)}
+          <p class="small">${this._t("Restart explanation", {temperature:this._degrees(settings.room_maximum - settings.room_hysteresis)})}</p>
         </div></details>
-        <details data-panel="add-room" ${this._open.has("add-room") ? "open" : ""}><summary>Add a thermostat to heating</summary><div class="guide"><ol>
-          <li>Add the thermostat through <a href="/config/integrations">Settings → Devices &amp; services → Tuya Local</a> and assign its room/area.</li>
-          <li>Open <a href="/config/entities">Entities</a>, select its <code>climate.…</code> entity, and add exactly one label: ${model.zones.map(zone => `<code>${esc(zone.label)}</code> for ${esc(zone.name)}`).join("; ")}.</li>
-          <li>The room and its controls appear automatically and inherit the central target. The current system mode applies immediately.</li>
-        </ol><p>The thermostat must report room temperature and support fan_only with low and medium speeds. Apply the label to the climate entity itself.</p></div></details>
+        <details data-panel="add-room" ${this._open.has("add-room") ? "open" : ""}><summary>${this._t("Add a thermostat to heating")}</summary><div class="guide"><ol>
+          <li>${this._t("Add thermostat instruction")} <a href="/config/integrations">${esc(this._t("Settings → Devices & services → Tuya Local"))}</a> ${this._t("and assign its room/area.")}</li>
+          <li>${this._t("Open")} <a href="/config/entities">${this._t("Entities")}</a>, ${this._t("select its")} <code>climate.…</code> ${this._t("entity, and add exactly one label:")} ${model.zones.map(zone => `<code>${esc(zone.label)}</code> ${this._t("for")} ${esc(zone.name)}`).join("; ")}.</li>
+          <li>${this._t("Room appears instruction")}</li>
+        </ol><p>${this._t("Thermostat requirements")} ${this._t("Choose the pipe instruction")}</p></div></details>
         <div class="zones">${model.zones.map(zone => {
           const members = rooms.filter(room => room.zone_ids.includes(zone.id));
           const text = zone.label_missing ? "Zone label missing" : model.mode === "Manual" ? "Water rule bypassed" : model.mode === "Off" ? "System off" : zone.sensor_status;
-          return `<section class="zone"><div class="zone-head"><div><h2>${esc(zone.name)}</h2><div class="water">Accepted water <strong>${degrees(zone.water_temperature)}</strong></div></div><span class="zone-badge ${zone.allowed ? "ready" : ""}">${esc(text)}</span></div>
-            ${zone.sensor_issue ? `<p class="alert error" role="alert">${esc(zone.sensor_issue)}. ${zone.sensor_fault ? "Adaptive fans in this zone are requested off." : "Using the last good reading temporarily."}${model.mode !== "Adaptive" ? ` ${model.mode} mode does not use water permission.` : ""}</p>` : ""}
-            <details class="diagnostics" data-panel="water-${esc(zone.id)}" ${this._open.has(`water-${zone.id}`) ? "open" : ""}><summary>Sensor readings & details</summary><p>Raw ${degrees(zone.raw_temperature)} · accepted ${degrees(zone.water_temperature)}</p><p>Raw report <span data-age="${zone.raw_reported_at || 0}"></span> · last accepted <span data-age="${zone.accepted_reported_at || 0}"></span></p><p>Rejected readings since startup: ${zone.rejected_readings || 0}</p><a class="device-settings" href="${esc(zone.configuration_url || '/config/entities')}">Shelly settings ↗</a></details>
-            <div class="room-list">${members.length ? members.map(room => this._room(room)).join("") : '<div class="empty">No rooms assigned. Use Add room to connect a thermostat.</div>'}</div></section>`;
+          return `<section class="zone"><div class="zone-head"><div><h2>${esc(zone.name)}</h2><div class="water">${this._t("Accepted water")} <strong>${this._degrees(zone.water_temperature)}</strong></div></div><span class="zone-badge ${zone.allowed ? "ready" : ""}">${esc(this._t(text))}</span></div>
+            ${zone.sensor_issue ? `<p class="alert error" role="alert">${esc(this._t(zone.sensor_issue))}. ${this._t(zone.sensor_fault ? "Zone fans off" : "Using the last good reading temporarily.")}${model.mode !== "Adaptive" ? ` ${this._t("Mode bypasses water", {mode:this._t(model.mode)})}` : ""}</p>` : ""}
+            <details class="diagnostics" data-panel="water-${esc(zone.id)}" ${this._open.has(`water-${zone.id}`) ? "open" : ""}><summary>${this._t("Sensor readings & details")}</summary><p>${this._t("Raw")} ${this._degrees(zone.raw_temperature)} · ${this._t("accepted")} ${this._degrees(zone.water_temperature)}</p><p>${this._t("Raw report")} <span data-age="${zone.raw_reported_at || 0}"></span> · ${this._t("last accepted")} <span data-age="${zone.accepted_reported_at || 0}"></span></p><p>${this._t("Rejected readings since startup")}: ${zone.rejected_readings || 0}</p><a class="device-settings" href="${esc(zone.configuration_url || '/config/entities')}">${this._t("Shelly settings ↗")}</a></details>
+            <div class="room-list">${members.length ? members.map(room => this._room(room)).join("") : `<div class="empty">${this._t("No rooms instruction")}</div>`}</div></section>`;
         }).join("")}</div>
-        <p class="footer">Temporary overrides return to the current central target when their timer ends. The room limit and Off mode always take priority.</p>
+        <p class="footer">${this._t("Footer")}</p>
       </ha-card>`;
     this._bind(model);
     this._clock();
   }
 
   _bind(model) {
+    this.shadowRoot.querySelector("[data-language]").onchange = event => {
+      this._language = event.target.value;
+      try { localStorage.setItem(`central-heating-language:${this._config.entity}`, this._language); } catch (_) { /* Keep the selection for this session. */ }
+      this._render(true);
+    };
     this.shadowRoot.querySelectorAll("details[data-panel]").forEach(panel => {
       panel.ontoggle = () => panel.open ? this._open.add(panel.dataset.panel) : this._open.delete(panel.dataset.panel);
     });
@@ -206,12 +294,12 @@ class CentralHeatingCard extends HTMLElement {
     const now = Date.now() / 1000;
     this.shadowRoot.querySelectorAll("[data-expires]").forEach(element => {
       const remaining = Math.ceil(Number(element.dataset.expires) - now);
-      element.textContent = remaining <= 0 ? "Ending · restoring central target" : remaining < 60 ? `${remaining}s remaining` : `${Math.ceil(remaining / 60)} min remaining`;
+      element.textContent = remaining <= 0 ? this._t("Ending · restoring central target") : this._t("{time} remaining", {time:remaining < 60 ? `${remaining} s` : `${Math.ceil(remaining / 60)} min`});
     });
     this.shadowRoot.querySelectorAll("[data-age]").forEach(element => {
       const timestamp = Number(element.dataset.age);
       const age = Math.max(0, Math.floor(now - timestamp));
-      element.textContent = !timestamp ? "unavailable" : age < 60 ? `${age}s ago` : age < 3600 ? `${Math.floor(age / 60)} min ago` : `${Math.floor(age / 3600)} h ago`;
+      element.textContent = !timestamp ? this._t("unavailable") : this._t("{time} ago", {time:age < 60 ? `${age} s` : age < 3600 ? `${Math.floor(age / 60)} min` : `${Math.floor(age / 3600)} h`});
     });
   }
 }
@@ -219,3 +307,4 @@ class CentralHeatingCard extends HTMLElement {
 if (!customElements.get("central-heating-card")) customElements.define("central-heating-card", CentralHeatingCard);
 window.customCards = window.customCards || [];
 if (!window.customCards.some(card => card.type === "central-heating-card")) window.customCards.push({type: "central-heating-card", name: "Central Heating", description: "Heating zones, timed room overrides, and sensor quality"});
+})();

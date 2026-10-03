@@ -7,8 +7,10 @@
   :root{--primary-text-color:#172331;--secondary-text-color:#546473;--card-background-color:#fff;--secondary-background-color:#f0f4f7;--divider-color:#d3dce3;--primary-color:#176ba0;--text-primary-color:#fff}
   body{margin:0;background:#e8eef2;font-family:Arial,sans-serif}
 </style>
-<script src="../custom_components/central_heating/www/central-heating-card.js"></script>
-<body><script>
+<script type="module" src="../custom_components/central_heating/www/central-heating-card.js"></script>
+<!-- Duplicate evaluation exercises cached/updated resources without global collisions. -->
+<script type="module" src="../custom_components/central_heating/www/central-heating-card.js?v=second-load"></script>
+<body><script type="module">
 (async () => {
   const assert = (condition, message) => { if (!condition) throw new Error(message); };
   const now = Date.now() / 1000;
@@ -29,6 +31,8 @@
   const calls = [];
   const card = document.createElement("central-heating-card");
   card.setConfig({entity:"sensor.heating"});
+  card.hass = {states:{}};
+  assert(card.shadowRoot.textContent.includes("uruchamia się"),"Missing startup entities show a Polish placeholder");
   const hass = {states:{"sensor.heating":{attributes:model}},callService:async (domain, service, data) => {
     calls.push({domain,service,data});
     if (service === "set_room_override") {
@@ -41,6 +45,18 @@
   document.body.append(card);
   card.hass = hass;
   const find = selector => card.shadowRoot.querySelector(selector);
+  assert(find("h1").textContent === "Ogrzewanie centralne","Polish is the deployment default");
+  assert(find('.reason').textContent.includes("Oczekiwanie na ciepłą wodę"),"Decision reasons are translated");
+  assert(find('.room-temperature').textContent === "21,0°C","Polish decimal formatting");
+  const language = find('[data-language]');
+  language.value = 'en';
+  language.dispatchEvent(new Event('change'));
+  assert(find("h1").textContent === "Central heating","English stays available");
+  const restored = document.createElement("central-heating-card");
+  restored.setConfig({entity:"sensor.heating",language:"pl"});
+  restored.hass = hass;
+  assert(restored.shadowRoot.querySelector("h1").textContent === "Central heating","Language choice survives card reconstruction");
+  assert(window.customCards.filter(item => item.type === "central-heating-card").length === 1,"Duplicate loading registers one card");
   assert(find(".room-head h3").textContent === "Bedroom <test>","Room names must be escaped");
   assert(!find('[data-panel="advanced"]').open,"Advanced settings start collapsed");
   for (const link of card.shadowRoot.querySelectorAll(".device-settings")) {
@@ -83,8 +99,20 @@
   assert(find('[role="alert"]').textContent.includes("Service failed"),"Service errors are visible");
   hass.callService = fail;
   assert(card.getBoundingClientRect().width <= innerWidth,"Card fits the viewport");
+  const polishLanguage = find('[data-language]');
+  polishLanguage.value = 'pl';
+  polishLanguage.dispatchEvent(new Event('change'));
+  assert([...card.shadowRoot.querySelectorAll('[role="alert"]')].some(element => element.textContent.includes("Podejrzany odczyt 85°C")),"Polish keeps the sensor warning");
+  assert(find('[data-duration] option[value="30 minutes"]').textContent === '30 minut',"Duration labels translate without changing service values");
+  assert(find('[data-mode="Adaptive"]').textContent === 'Adaptacyjny',"Mode labels translate without changing service values");
+  await find('[data-mode="Manual"]').onclick();
+  assert(calls.at(-1).data.option === 'Manual',"Polish mode actions preserve HA option values");
+  await new Promise(resolve => setTimeout(resolve, 50));
+  const surface = card.shadowRoot.querySelector('ha-card');
+  assert(surface.scrollWidth <= surface.clientWidth + 1,`Polish controls fit the viewport (${surface.scrollWidth}/${surface.clientWidth})`);
+  localStorage.removeItem('central-heating-language:sensor.heating');
   document.body.dataset.result = "pass";
-  document.body.dataset.checks = "12";
+  document.body.dataset.checks = "24";
 })().catch(error => {
   document.body.dataset.result = "fail";
   document.body.dataset.error = error.message;

@@ -8,7 +8,7 @@ version=$(cat "$stage/VERSION")
 backup="/config/central-heating-releases/$(date -u +%Y%m%dT%H%M%SZ)-v$version"
 mkdir -p "$backup"
 cp -p /config/configuration.yaml "$backup/configuration.yaml"
-for registry in core.config_entries core.entity_registry core.label_registry central_heating; do
+for registry in core.config_entries core.entity_registry core.label_registry central_heating lovelace_resources; do
     if [[ -f "/config/.storage/$registry" ]]; then
         mkdir -p "$backup/storage"
         cp -p "/config/.storage/$registry" "$backup/storage/$registry"

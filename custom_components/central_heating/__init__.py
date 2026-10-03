@@ -1,17 +1,14 @@
 """Central controls for locally integrated fan-coil thermostats."""
 
-from pathlib import Path
-
 import voluptuous as vol
 
-from homeassistant.components import frontend
-from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import config_validation as cv
 
-from .const import CARD_URL, DOMAIN, OVERRIDE_DURATIONS, PLATFORMS
+from .const import DOMAIN, OVERRIDE_DURATIONS, PLATFORMS
 from .controller import HeatingController
+from .frontend import async_register_card
 
 ZONE_SCHEMA = vol.Schema(
     {
@@ -74,16 +71,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         vol.Required("target"): vol.All(vol.Coerce(float), vol.Range(min=5, max=35)),
         vol.Required("duration", default="2 hours"): vol.In(OVERRIDE_DURATIONS),
     }))
-    if not hass.data.get(f"{DOMAIN}_frontend_registered"):
-        await hass.http.async_register_static_paths(
-            [StaticPathConfig(
-                "/central_heating/central-heating-card.js",
-                str(Path(__file__).parent / "www" / "central-heating-card.js"),
-                False,
-            )]
-        )
-        frontend.add_extra_js_url(hass, CARD_URL)
-        hass.data[f"{DOMAIN}_frontend_registered"] = True
+    await async_register_card(hass)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     controller.async_start()
     return True
