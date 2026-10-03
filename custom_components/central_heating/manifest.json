@@ -1,10 +1,10 @@
 {
   "domain": "central_heating",
   "name": "Central Heating System",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "config_flow": true,
   "codeowners": ["@jmguzik"],
-  "dependencies": ["frontend", "lovelace"],
+  "dependencies": ["frontend", "lovelace", "persistent_notification"],
   "documentation": "https://github.com/jmguzik/central-heating-system",
   "issue_tracker": "https://github.com/jmguzik/central-heating-system/issues",
   "integration_type": "service",

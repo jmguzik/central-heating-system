@@ -6,6 +6,7 @@ from datetime import timedelta
 import logging
 from time import monotonic, time
 
+from homeassistant.components import persistent_notification
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, EVENT_HOMEASSISTANT_STOP, EVENT_STATE_CHANGED, EVENT_STATE_REPORTED
 from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
@@ -15,7 +16,7 @@ from homeassistant.helpers.storage import Store
 
 from .const import DOMAIN, OVERRIDE_DURATIONS, RECONCILE_SECONDS, VERSION
 from .logic import Decision, RoomMemory, Settings, decide, room_blocked, temperature
-from .water import CONFIRM_SECONDS, FAULT_SECONDS, WaterFilter
+from .water import CONFIRM_SECONDS, FAULT_SECONDS, UNAVAILABLE, WaterFilter, select_water_sources
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -39,6 +40,8 @@ class HeatingController:
         self.memories = {}
         self.gates = {key: False for key in self.zones}
         self.water_filters = {key: WaterFilter() for key in self.zones}
+        self._water_sources = {key: key for key in self.zones}
+        self._backup_notification_state = None
         self._water_markers = {}
         self._water_times = {key: {"raw": None, "accepted": None} for key in self.zones}
         self.controls = {}
@@ -157,6 +160,7 @@ class HeatingController:
             await asyncio.gather(self._task, return_exceptions=True)
         if turn_off:
             await asyncio.gather(*(self._turn_off(room.entity_id) for room in self.rooms.values()))
+        persistent_notification.async_dismiss(self.hass, f"{DOMAIN}_water_backup")
         await self._store.async_save(self._serialize())
 
     @callback
@@ -299,9 +303,14 @@ class HeatingController:
             self._water_times[key]["accepted"] = self._water_times[key]["raw"]
 
     def _update_gates(self):
+        now = monotonic()
         for key, zone in self.zones.items():
             self._observe_water(key, self.hass.states.get(zone["sensor"]))
-            self.gates[key] = self.water_filters[key].permission(self.gates[key], monotonic(), self.settings)
+            self.gates[key] = self.water_filters[key].permission(self.gates[key], now, self.settings)
+        self._water_sources = select_water_sources(self.water_filters, self._water_sources, now)
+
+    def _water_source(self, key):
+        return self._water_sources[key] if self.settings.mode == "Adaptive" else key
 
     def _room_temperature(self, state):
         if state is None or state.state in ("unknown", "unavailable"):
@@ -318,16 +327,19 @@ class HeatingController:
         if self._started:
             memory.blocked = room_blocked(current, memory.blocked, self.settings)
         attributes = state.attributes if state else {}
-        water = self.water_filters[room.zone_ids[0]]
+        source = self._water_source(room.zone_ids[0])
+        water = self.water_filters.get(source)
+        allowed = self.gates[source] if source is not None else False
         decision = decide(
-            self.settings, memory, current, self.gates[room.zone_ids[0]],
-            water_valid=water.usable(monotonic()),
+            self.settings, memory, current, allowed,
+            water_valid=water is not None and water.usable(monotonic()),
             membership_valid=len(room.zone_ids) == 1,
             available=state is not None and state.state not in ("unavailable", "unknown"),
             compatible="fan_only" in attributes.get("hvac_modes", []) and {"low", "medium"}.issubset(attributes.get("fan_modes", [])),
         )
         if self.settings.mode == "Adaptive" and decision.reason in ("Water temperature unavailable", "Water too cold"):
-            return Decision("off", None, water.status(self.gates[room.zone_ids[0]], monotonic(), self.settings))
+            reason = water.status(allowed, monotonic(), self.settings) if water else "No usable water sensor"
+            return Decision("off", None, reason)
         return decision
 
     async def _turn_off(self, entity_id):
@@ -391,6 +403,8 @@ class HeatingController:
                 "key": room.key, "entity_id": room.entity_id, "name": room.name,
                 "configuration_url": f"/config/devices/device/{room.device_id}" if room.device_id else "/config/entities",
                 "zone_ids": list(room.zone_ids), "temperature": self._room_temperature(state),
+                "water_source_id": self._water_source(room.zone_ids[0]),
+                "backup_active": self._water_source(room.zone_ids[0]) not in (None, room.zone_ids[0]),
                 "effective_target": target, "target_source": ("Temporary" if memory.override_expires_at else "Custom") if memory.override else "Central",
                 "custom_target": memory.target, "override": memory.override,
                 "override_duration": memory.override_duration, "override_expires_at": memory.override_expires_at,
@@ -402,25 +416,71 @@ class HeatingController:
             })
         labels = lr.async_get(self.hass)
         registry = er.async_get(self.hass)
+        zone_data = []
+        for key, zone in self.zones.items():
+            source = self._water_source(key)
+            water = self.water_filters.get(source)
+            primary = self.water_filters[key]
+            allowed = self.gates[source] if source is not None else False
+            backup = source not in (None, key)
+            entity = registry.async_get(zone["sensor"])
+            zone_data.append({**zone,
+                "configuration_url": f"/config/devices/device/{entity.device_id}" if entity and entity.device_id else "/config/entities",
+                "water_temperature": primary.accepted,
+                "raw_temperature": primary.raw,
+                "water_source_id": source,
+                "operating_water_temperature": water.accepted if water and water.usable(monotonic()) else None,
+                "backup_active": backup,
+                "backup_source_name": self.zones[source]["name"] if backup else None,
+                "backup_source_sensor": self.zones[source]["sensor"] if backup else None,
+                "allowed": allowed,
+                "sensor_status": water.status(allowed, monotonic(), self.settings) if water else "No usable water sensor",
+                "sensor_issue": primary.issue,
+                "sensor_fault": primary.issue == UNAVAILABLE or not primary.usable(monotonic()),
+                "raw_reported_at": self._water_times[key]["raw"],
+                "accepted_reported_at": self._water_times[key]["accepted"],
+                "rejected_readings": primary.rejected_readings,
+                "confirm_seconds": CONFIRM_SECONDS, "fault_seconds": FAULT_SECONDS,
+                "label_missing": labels.async_get_label(zone["label"]) is None,
+            })
         self.snapshot = {
             "version": VERSION, "mode": self.settings.mode, "settings": self.settings.serialize(),
             "controls": dict(self.controls), "startup_fault": self.startup_fault,
-            "zones": [{**zone,
-                "configuration_url": f"/config/devices/device/{entity.device_id}" if (entity := registry.async_get(zone["sensor"])) and entity.device_id else "/config/entities",
-                "water_temperature": self.water_filters[key].accepted,
-                "raw_temperature": self.water_filters[key].raw,
-                "allowed": self.gates[key],
-                "sensor_status": self.water_filters[key].status(self.gates[key], monotonic(), self.settings),
-                "sensor_issue": self.water_filters[key].issue,
-                "sensor_fault": not self.water_filters[key].usable(monotonic()),
-                "raw_reported_at": self._water_times[key]["raw"],
-                "accepted_reported_at": self._water_times[key]["accepted"],
-                "rejected_readings": self.water_filters[key].rejected_readings,
-                "confirm_seconds": CONFIRM_SECONDS, "fault_seconds": FAULT_SECONDS,
-                "label_missing": labels.async_get_label(zone["label"]) is None,
-            } for key, zone in self.zones.items()],
+            "zones": zone_data,
+            "backup_active": any(zone["backup_active"] for zone in zone_data),
             "rooms": room_data,
             "running_fans": sum(room["reported_mode"] == "fan_only" for room in room_data),
         }
+        if self._started:
+            self._notify_backup(zone_data)
         for listener in tuple(self._listeners):
             listener()
+
+    @callback
+    def _notify_backup(self, zones):
+        active = tuple((zone["id"], zone["water_source_id"]) for zone in zones if zone["backup_active"])
+        language = getattr(self.hass.config, "language", "en")
+        signature = (language, active)
+        if signature == self._backup_notification_state:
+            return
+        self._backup_notification_state = signature
+        notification_id = f"{DOMAIN}_water_backup"
+        if not active:
+            persistent_notification.async_dismiss(self.hass, notification_id)
+            return
+        polish = language.startswith("pl")
+        title = "Ogrzewanie: czujnik zapasowy" if polish else "Heating: backup water sensor"
+        lines = []
+        for key, source in active:
+            zone, backup = self.zones[key], self.zones[source]
+            lines.append(
+                f"{zone['name']}: sterowanie korzysta z czujnika {backup['name']} ({backup['sensor']}). Własny czujnik jest niedostępny lub podaje błędne odczyty."
+                if polish else
+                f"{zone['name']}: control uses {backup['name']} ({backup['sensor']}). Its own sensor is unavailable or has invalid readings."
+            )
+        lines.append(
+            "Powrót do własnego czujnika nastąpi automatycznie po poprawnym odczycie. Obowiązują zwykłe progi wody i limity temperatury pokoi."
+            if polish else
+            "The primary sensor is restored automatically after a valid reading. Normal water thresholds and room temperature limits apply."
+        )
+        persistent_notification.async_create(self.hass, "\n\n".join(lines), title, notification_id)

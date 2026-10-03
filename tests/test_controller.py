@@ -44,6 +44,14 @@ class Store:
 
 
 module("homeassistant")
+module("homeassistant.components")
+module("homeassistant.components.persistent_notification",
+       async_create=lambda hass, message, title, notification_id: (
+           hass.notifications.update({notification_id: {"message": message, "title": title}}),
+           hass.notification_events.append(("create", notification_id))),
+       async_dismiss=lambda hass, notification_id: (
+           hass.notifications.pop(notification_id, None),
+           hass.notification_events.append(("dismiss", notification_id))))
 module("homeassistant.const", EVENT_HOMEASSISTANT_STARTED="started", EVENT_HOMEASSISTANT_STOP="stop", EVENT_STATE_CHANGED="state_changed", EVENT_STATE_REPORTED="state_reported")
 def callback(function):
     function._hass_callback = True
@@ -166,13 +174,15 @@ class Bus:
 class Hass:
     def __init__(self):
         self.storage = {}
+        self.notifications = {}
+        self.notification_events = []
         self.states = States()
         self.services = Services(self)
         self.entity_registry = Registry()
         self.label_registry = Labels()
         self.device_registry = SimpleNamespace(async_get=lambda _: None)
         self.area_registry = SimpleNamespace(async_get_area=lambda _: None)
-        self.config = SimpleNamespace(units=SimpleNamespace(temperature_unit="°C"))
+        self.config = SimpleNamespace(units=SimpleNamespace(temperature_unit="°C"), language="en")
         self.is_running = True
         self.bus = Bus()
 
@@ -431,7 +441,7 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(list(self.controller.water_filters["upstairs"].samples), [34, 34, 34])
         await self.controller.async_stop(turn_off=False)
 
-    async def test_sensor_fault_stops_only_its_adaptive_zone_and_manual_bypasses_it(self):
+    async def test_sensor_fault_uses_healthy_backup_and_manual_bypasses_it(self):
         self.hass.entity_registry.add("climate.lounge", ["heating_downstairs"])
         self.hass.states.room("climate.lounge")
         self.hass.states.water("sensor.downstairs", 34)
@@ -442,10 +452,160 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         await self.run_controller()
         self.clock += 60
         await self.run_controller()
-        self.assertEqual(self.hass.states.get("climate.office").state, "off")
+        self.assertEqual(self.hass.states.get("climate.office").state, "fan_only")
+        upstairs = next(zone for zone in self.controller.snapshot["zones"] if zone["id"] == "upstairs")
+        self.assertTrue(upstairs["backup_active"])
+        self.assertEqual(upstairs["water_source_id"], "downstairs")
         self.assertEqual(self.hass.states.get("climate.lounge").state, "fan_only")
         await self.controller.async_set_setting("mode", "Manual")
         self.assertEqual(self.hass.states.get("climate.office").attributes["fan_mode"], "low")
+        self.assertFalse(self.controller.snapshot["backup_active"])
+        self.assertEqual(self.hass.notifications, {})
+
+    async def prepare_adaptive_water(self, backup_temperature=34):
+        self.controller.settings.mode = "Adaptive"
+        self.hass.states.water("sensor.downstairs", backup_temperature)
+        await self.run_controller()
+        self.clock += 30
+        await self.run_controller()
+
+    def zone(self, key):
+        return next(zone for zone in self.controller.snapshot["zones"] if zone["id"] == key)
+
+    async def test_unavailable_primary_immediately_uses_backup_without_notification_spam(self):
+        await self.prepare_adaptive_water()
+        self.hass.states.water("sensor.upstairs", "unavailable")
+        await self.run_controller()
+        self.assertEqual(self.hass.states.get("climate.office").state, "fan_only")
+        self.assertTrue(self.zone("upstairs")["backup_active"])
+        self.assertEqual(self.zone("upstairs")["water_source_id"], "downstairs")
+        self.assertEqual(self.zone("upstairs")["operating_water_temperature"], 34)
+        self.assertIn("Downstairs", self.hass.notifications["central_heating_water_backup"]["message"])
+        events = deepcopy(self.hass.notification_events)
+        for _ in range(3):
+            await self.run_controller()
+        self.assertEqual(events, self.hass.notification_events)
+
+    async def test_backup_works_in_both_directions(self):
+        self.hass.entity_registry.add("climate.lounge", ["heating_downstairs"])
+        self.hass.states.room("climate.lounge")
+        await self.prepare_adaptive_water()
+        for failed, backup in (("upstairs", "downstairs"), ("downstairs", "upstairs")):
+            self.hass.states.water(f"sensor.{failed}", "unknown")
+            await self.run_controller()
+            self.assertEqual(self.zone(failed)["water_source_id"], backup)
+            self.assertTrue(self.zone(failed)["backup_active"])
+            self.assertEqual(self.hass.states.get("climate.office").state, "fan_only")
+            self.assertEqual(self.hass.states.get("climate.lounge").state, "fan_only")
+            self.hass.states.water(f"sensor.{failed}", 34)
+            await self.run_controller()
+            self.assertFalse(self.controller.snapshot["backup_active"])
+
+    async def test_startup_with_missing_primary_confirms_backup_before_enabling(self):
+        self.controller.settings.mode = "Adaptive"
+        self.hass.states.values.pop("sensor.upstairs")
+        self.hass.states.water("sensor.downstairs", 34)
+        await self.run_controller()
+        self.assertTrue(self.zone("upstairs")["backup_active"])
+        self.assertEqual(self.zone("upstairs")["sensor_status"], "Confirming warm water")
+        self.assertEqual(self.hass.states.get("climate.office").state, "off")
+        self.clock += 29
+        await self.run_controller()
+        self.assertEqual(self.hass.states.get("climate.office").state, "off")
+        self.clock += 1
+        await self.run_controller()
+        self.assertEqual(self.hass.states.get("climate.office").state, "fan_only")
+
+    async def test_backup_cold_water_stops_fan_immediately(self):
+        await self.prepare_adaptive_water()
+        self.hass.states.water("sensor.upstairs", "unavailable")
+        await self.run_controller()
+        self.hass.states.water("sensor.downstairs", 30)
+        await self.run_controller()
+        self.assertTrue(self.zone("upstairs")["backup_active"])
+        self.assertFalse(self.zone("upstairs")["allowed"])
+        self.assertEqual(self.zone("upstairs")["operating_water_temperature"], 30)
+        self.assertEqual(self.hass.states.get("climate.office").state, "off")
+
+    async def test_backup_uses_its_own_hysteresis_not_failed_primary_latch(self):
+        await self.prepare_adaptive_water(31)
+        self.assertTrue(self.controller.gates["upstairs"])
+        self.assertFalse(self.controller.gates["downstairs"])
+        self.hass.states.water("sensor.upstairs", "unavailable")
+        await self.run_controller()
+        self.assertTrue(self.zone("upstairs")["backup_active"])
+        self.assertFalse(self.zone("upstairs")["allowed"])
+        self.assertEqual(self.hass.states.get("climate.office").state, "off")
+
+    async def test_primary_recovery_uses_its_cold_reading_and_clears_warning(self):
+        await self.prepare_adaptive_water()
+        self.hass.states.water("sensor.upstairs", "unavailable")
+        await self.run_controller()
+        self.hass.states.water("sensor.upstairs", 29)
+        await self.run_controller()
+        self.assertFalse(self.controller.snapshot["backup_active"])
+        self.assertEqual(self.zone("upstairs")["water_source_id"], "upstairs")
+        self.assertEqual(self.hass.states.get("climate.office").state, "off")
+        self.assertEqual(self.hass.notifications, {})
+
+    async def test_both_unavailable_stop_adaptive_immediately_without_circular_backup(self):
+        await self.prepare_adaptive_water()
+        for key in ("upstairs", "downstairs"):
+            self.hass.states.water(f"sensor.{key}", "unavailable")
+        await self.run_controller()
+        self.assertEqual(self.hass.states.get("climate.office").state, "off")
+        self.assertFalse(self.controller.snapshot["backup_active"])
+        for zone in self.controller.snapshot["zones"]:
+            self.assertIsNone(zone["water_source_id"])
+            self.assertFalse(zone["allowed"])
+            self.assertEqual(zone["sensor_status"], "No usable water sensor")
+
+    async def test_rejected_backup_reading_is_not_reused_for_failed_primary(self):
+        await self.prepare_adaptive_water()
+        self.hass.states.water("sensor.upstairs", "unavailable")
+        self.hass.states.water("sensor.downstairs", 85)
+        await self.run_controller()
+        self.assertIsNone(self.zone("upstairs")["water_source_id"])
+        self.assertEqual(self.hass.states.get("climate.office").state, "off")
+
+    async def test_backup_loss_during_device_command_prevents_start(self):
+        await self.prepare_adaptive_water()
+        self.clock += 11
+        self.hass.states.room("climate.office")
+        self.hass.services.calls.clear()
+        self.hass.states.water("sensor.upstairs", "unavailable")
+        async def lose_backup(service, data):
+            self.hass.states.water("sensor.downstairs", "unavailable")
+        self.hass.services.hook = lose_backup
+        await self.run_controller()
+        self.assertEqual(self.fan_calls(), [("set_fan_mode", "medium")])
+        self.assertEqual(self.hass.states.get("climate.office").state, "off")
+
+    async def test_room_cutoff_and_off_mode_win_over_backup(self):
+        await self.prepare_adaptive_water()
+        self.hass.states.water("sensor.upstairs", "unavailable")
+        self.hass.states.get("climate.office").attributes["current_temperature"] = 24
+        await self.run_controller()
+        self.assertTrue(self.zone("upstairs")["backup_active"])
+        self.assertEqual(self.hass.states.get("climate.office").state, "off")
+        await self.controller.async_set_setting("mode", "Off")
+        self.assertFalse(self.controller.snapshot["backup_active"])
+        self.assertEqual(self.hass.notifications, {})
+
+    async def test_backup_is_recomputed_after_restart_and_notification_is_polish(self):
+        await self.prepare_adaptive_water()
+        self.hass.states.water("sensor.upstairs", "unavailable")
+        await self.run_controller()
+        await self.controller._store.async_save(self.controller._serialize())
+        self.hass.config.language = "pl"
+        restored = controller_module.HeatingController(self.hass, self.entry, self.zones)
+        await restored.async_load()
+        restored._started = True
+        await restored.async_reconcile_now()
+        self.assertTrue(restored.snapshot["backup_active"])
+        self.assertEqual(restored.snapshot["zones"][0]["water_source_id"], "downstairs")
+        self.assertIn("czujnik zapasowy", self.hass.notifications["central_heating_water_backup"]["title"])
+        self.assertIn("czujnika Downstairs", self.hass.notifications["central_heating_water_backup"]["message"])
 
     async def test_configuration_links_resolve_each_actual_device(self):
         self.hass.entity_registry.entities["climate.office"].device_id = "thermostat-id"

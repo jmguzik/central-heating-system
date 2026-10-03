@@ -111,5 +111,47 @@ class WaterFilterTests(unittest.TestCase):
             self.assertFalse(fresh.permission(True, 0, self.settings))
 
 
+class WaterSourceTests(unittest.TestCase):
+    def setUp(self):
+        self.settings = SimpleNamespace(water_on=33, water_off=30)
+        self.filters = {key: water.WaterFilter() for key in ("upstairs", "downstairs")}
+        self.previous = {key: key for key in self.filters}
+        for key, value in (("upstairs", 34), ("downstairs", 40)):
+            self.filters[key].observe(value, 0, self.settings)
+
+    def sources(self, now=0):
+        self.previous = water.select_water_sources(self.filters, self.previous, now)
+        return self.previous
+
+    def test_healthy_readers_remain_independent(self):
+        self.assertEqual(self.sources(), {"upstairs": "upstairs", "downstairs": "downstairs"})
+
+    def test_isolated_spike_keeps_grace_then_switches_to_healthy_backup(self):
+        self.filters["upstairs"].observe(85, 10, self.settings)
+        self.assertEqual(self.sources(69.9)["upstairs"], "upstairs")
+        self.assertEqual(self.sources(70)["upstairs"], "downstairs")
+
+    def test_invalid_primary_after_unavailable_stays_on_backup_until_valid(self):
+        primary = self.filters["upstairs"]
+        primary.observe(None, 10, self.settings)
+        self.assertEqual(self.sources(10)["upstairs"], "downstairs")
+        primary.observe(85, 11, self.settings)
+        self.assertEqual(self.sources(11)["upstairs"], "downstairs")
+        primary.observe(34, 12, self.settings)
+        self.assertEqual(self.sources(12)["upstairs"], "upstairs")
+
+    def test_a_reader_retaining_invalid_grace_cannot_be_backup(self):
+        self.filters["upstairs"].observe(None, 10, self.settings)
+        self.filters["downstairs"].observe(85, 10, self.settings)
+        self.assertIsNone(self.sources(10)["upstairs"])
+        self.assertEqual(self.previous["downstairs"], "downstairs")
+        self.assertEqual(self.sources(70), {"upstairs": None, "downstairs": None})
+
+    def test_single_reader_failure_has_no_backup(self):
+        only = self.filters["upstairs"]
+        only.observe(None, 10, self.settings)
+        self.assertEqual(water.select_water_sources({"upstairs": only}, {"upstairs": "upstairs"}, 10), {"upstairs": None})
+
+
 if __name__ == "__main__":
     unittest.main()

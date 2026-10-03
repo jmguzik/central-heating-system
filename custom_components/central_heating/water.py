@@ -5,6 +5,28 @@ from statistics import median_low
 
 CONFIRM_SECONDS = 30
 FAULT_SECONDS = 60
+UNAVAILABLE = "Water sensor unavailable"
+
+
+def select_water_sources(filters, previous, now):
+    """Resolve primaries and healthy backups without chaining failed readers."""
+    sources = {}
+    for key, primary in filters.items():
+        if primary.usable(now) and not primary.issue:
+            sources[key] = key
+        elif (
+            primary.usable(now) and primary.issue != UNAVAILABLE
+            and previous.get(key, key) == key
+        ):
+            # Brief rejected spikes retain only this sensor's existing grace.
+            # Once on backup, stay there until the primary reports valid data.
+            sources[key] = key
+        else:
+            sources[key] = next((
+                other for other, backup in filters.items()
+                if other != key and backup.usable(now) and not backup.issue
+            ), None)
+    return sources
 
 
 class WaterFilter:
@@ -27,7 +49,7 @@ class WaterFilter:
         # 85°C is the DS18B20 reset value. A gradual approach to 85°C is
         # legitimate; an abrupt jump or an unverified startup value is not.
         if value is None or not 0 <= value <= 120:
-            self._reject("Water sensor unavailable", now)
+            self._reject(UNAVAILABLE, now)
             return
         if value == 85 and (self.accepted is None or abs(value - self.accepted) > 5):
             self._reject("Suspect 85°C sensor reset", now)
