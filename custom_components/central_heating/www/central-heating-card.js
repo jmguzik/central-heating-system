@@ -76,6 +76,31 @@ const english = {
   "Footer": "Temporary overrides return to the current central target when their timer ends. The room limit and Off mode always take priority.",
   "Starting": "Central heating is starting. If this persists, check the integration in Settings.",
 };
+Object.assign(polish, {
+  "Waiting for 10-minute actuator limiter":"Oczekiwanie na 10-minutowy odstęp korekt", "HA correction active":"Korekta HA jest aktywna", "miGo owns native heating":"miGo steruje ogrzewaniem", "Release pending":"Oczekiwanie na oddanie sterowania", "Native schedule sync pending; correction paused":"Synchronizacja harmonogramu miGo oczekuje; korekta wstrzymana",
+  "Insufficient fresh room coverage or invalid miGo reference; correction paused":"Za mało świeżych odczytów pokojowych lub nieprawidłowy odczyt miGo; korekta wstrzymana", "Native fallback schedule pending; correction paused":"Harmonogram awaryjny miGo oczekuje na potwierdzenie; korekta wstrzymana", "Native thermostat RF unavailable":"Termostat miGo nie ma łączności radiowej", "Native thermostat RF report stale":"Odczyt radiowy termostatu miGo jest nieaktualny", "Native output outside configured bounds; correction paused":"Nastawa miGo poza ustawionymi limitami; korekta wstrzymana", "Native cancellation not confirmed":"Anulowanie nastawy miGo niepotwierdzone",
+  "Home":"Dom", "Schedule":"Harmonogram", "Settings":"Ustawienia", "Whole-home temperature":"Temperatura całego domu",
+  "Weighted average":"Średnia ważona", "Source":"Źródło", "Ownership":"Sterowanie", "miGo reference (weight 0)":"Odczyt miGo (waga 0)",
+  "Enable HA correction":"Włącz korektę HA", "Relinquish to miGo":"Oddaj sterowanie miGo", "Apply global override":"Zastosuj cel dla domu",
+  "Cancel global override":"Anuluj cel dla domu", "Minutes":"Minuty", "Output saturated":"Osiągnięto limit korekty", "Native expiry":"Koniec ręcznej nastawy miGo",
+  "Native schedule":"Harmonogram miGo", "Pending":"Oczekuje", "Confirmed":"Potwierdzony", "Prepare native copy":"Utwórz osobną kopię w miGo",
+  "Save and sync schedule":"Zapisz i wyślij do miGo", "Add transition":"Dodaj zmianę", "Copy day":"Kopiuj dzień", "All days":"Wszystkie dni", "Weekdays":"Pon–Pt", "Weekend":"Sob–Nd",
+  "Time":"Godzina", "Remove":"Usuń", "Save comfort settings":"Zapisz ustawienia domu", "Ambient sensors and weights":"Czujniki pokojowe i wagi",
+  "Discover native schedules":"Znajdź dom i harmonogramy miGo", "Proposed output":"Proponowana nastawa", "Fan-only mode":"Tryb samych wentylatorów", "Retry native sync":"Ponów synchronizację miGo",
+  "Ambient sensor":"Czujnik pokojowy", "Weight":"Waga", "Excluded":"Wykluczony", "miGo thermostat":"Termostat miGo", "Home ID":"ID domu", "Room ID":"ID pokoju", "Source schedule ID":"ID harmonogramu do skopiowania",
+  "Minimum output °C":"Minimalna nastawa °C", "Maximum output °C":"Maksymalna nastawa °C", "Shared native duration (minutes)":"Wspólny czas ręcznej nastawy (minuty)",
+  "Reference polling (seconds)":"Odczyt miGo (sekundy)", "Correction interval (seconds)":"Odstęp korekt (sekundy)", "Maximum sensor age (seconds)":"Maksymalny wiek odczytu (sekundy)", "Required weighted coverage":"Wymagane pokrycie wag", "Output smoothing (seconds)":"Wygładzanie korekty (sekundy)", "Quantization hysteresis °C":"Histereza zaokrąglania °C",
+  "Local fan-only overrides":"Nastawy pokoju zmieniają tylko lokalny wentylator, nie globalny cel kotła.",
+  "Schedule help":"Poniedziałek 00:00 jest początkiem tygodnia. Cel obowiązuje do następnej zmiany. Kopiowanie zastępuje wybrane dni. Do miGo wysyłany jest prawdziwy, nieskorygowany plan.",
+  "Comfort help":"Korekta zachowuje modulację miGo. Czujniki wody nie należą do średniej. Zwykła zmiana nastawy: najwyżej 0,5°C co 10 minut, także po zmianie celu ręcznego.",
+  "Native duration help":"To wspólne ustawienie miGo, nie czas osobnego polecenia. Domyślnie proponujemy 60 minut. Zmiana następuje tylko przy włączeniu korekty lub zapisie zmienionego czasu. Po awarii HA miGo wraca do wysłanego planu po upływie potwierdzonej nastawy.",
+});
+Object.assign(english, {
+  "Local fan-only overrides":"Room overrides affect only the local fan, not the global boiler target.",
+  "Schedule help":"Monday 00:00 starts the week. A target holds until the next transition. Copying replaces the chosen days. miGo receives the real, uncorrected weekly schedule.",
+  "Comfort help":"Correction preserves native miGo modulation. Water sensors are excluded from the average. Ordinary output changes are limited to 0.5°C every 10 minutes, including manual target changes.",
+  "Native duration help":"This is miGo's shared setting, not a per-command timer. We propose 60 minutes. It changes only on explicit enable or when saving a changed duration. If HA stops, miGo returns to the synced schedule when the confirmed native override expires.",
+});
 
 class CentralHeatingCard extends HTMLElement {
   constructor() {
@@ -83,6 +108,8 @@ class CentralHeatingCard extends HTMLElement {
     this._drafts = new Map();
     this._open = new Set();
     this._pending = false;
+    this._tab = "home";
+    this._day = 0;
   }
 
   setConfig(config) {
@@ -93,6 +120,7 @@ class CentralHeatingCard extends HTMLElement {
     if (!config.entity) throw new Error(this._t("Select the central heating status entity"));
     // Keep the host's width stable while a render replaces its shadow styles.
     this.style.display = "block";
+    this.style.width = "100%";
     if (!this.shadowRoot) this.attachShadow({mode: "open"});
     this._render();
   }
@@ -185,7 +213,7 @@ class CentralHeatingCard extends HTMLElement {
     this.shadowRoot.innerHTML = `
       <style>
         :host{display:block;color:var(--primary-text-color);font-family:var(--ha-font-family,inherit)}
-        *{box-sizing:border-box}ha-card{display:block;padding:24px;border-radius:18px;max-width:1180px;margin:8px auto;background:var(--ha-card-background,var(--card-background-color))}
+        *{box-sizing:border-box}ha-card{display:block;width:100%;padding:24px;border-radius:18px;max-width:1180px;margin:8px auto;background:var(--ha-card-background,var(--card-background-color))}
         h1,h2,h3,p{margin:0}h1{font-size:28px}h2{font-size:20px}h3{font-size:17px}
         button,input,select{font:inherit;color:inherit}button,select,summary{cursor:pointer}button:disabled,input:disabled,select:disabled{opacity:.55;cursor:wait}
         button{min-height:44px;border:1px solid var(--divider-color);border-radius:9px;background:var(--card-background-color);padding:8px 14px}
@@ -204,13 +232,16 @@ class CentralHeatingCard extends HTMLElement {
         .guide{padding:14px;background:var(--secondary-background-color);border-radius:10px;font-size:14px;line-height:1.7}.guide ol{padding-left:22px}.guide code{white-space:normal;overflow-wrap:anywhere}a{color:var(--primary-color)}.device-settings{display:inline-block;font-size:12px;color:var(--secondary-text-color);margin-top:10px;padding:6px 0}.empty{padding:18px;font-size:13px;border:1px dashed var(--divider-color);border-radius:9px}.footer{margin-top:20px;font-size:12px;color:var(--secondary-text-color)}
         @media(max-width:800px){.zones{grid-template-columns:1fr}.hero{align-items:flex-start}.hero-actions{justify-content:flex-end}ha-card{padding:20px}}
         @media(max-width:480px){ha-card{padding:16px;margin:4px auto}.hero{display:block}h1{font-size:24px}.hero-actions{justify-content:flex-start;margin-top:12px}.main-controls{display:block}.modes{margin-bottom:14px}.modes button{flex:1;min-width:0}.settings,.override-form{grid-template-columns:1fr}.room{padding:14px}.settings{padding:12px}}
+        [hidden]{display:none!important}.tabs,.days{display:flex;gap:6px;flex-wrap:wrap;margin:12px 0}.tabs button{flex:1}.tabs .active,.days .active{background:var(--primary-color);color:white}.comfort-home{padding:16px;background:var(--secondary-background-color);border-radius:12px;margin:16px 0}.comfort-metric{font-size:38px;font-weight:650;margin:8px 0}.comfort-meta{display:flex;gap:16px;flex-wrap:wrap;margin:8px 0}.schedule-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto;gap:8px;margin:10px 0;align-items:end}.schedule-row input{width:100%;min-width:0}.comfort-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.comfort-grid input,.comfort-grid select{width:100%;min-width:0}.ambient-row{display:grid;grid-template-columns:minmax(0,1fr) 82px;gap:8px;margin:10px 0}.ambient-row input{width:100%;min-width:0}.comfort-actions{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0}.comfort-status{overflow-wrap:anywhere;line-height:1.5}.comfort-pane h2{margin-top:16px}.days button{flex:1;padding:8px 4px}.global-override{display:grid;grid-template-columns:1fr 1fr;gap:12px}.global-override input{width:100%;min-width:0}.global-override button{grid-column:1/-1}@media(max-width:480px){.comfort-grid{grid-template-columns:1fr}.schedule-row{grid-template-columns:minmax(0,1fr) minmax(0,1fr) 44px}.schedule-row button{padding:8px 2px}.comfort-actions button{flex:1}.tabs button{padding:8px 4px}}
       </style>
       <ha-card aria-busy="${this._pending}" lang="${this._language}">
         <div class="hero"><div><h1>${this._t("Central heating")}</h1><p class="subtitle">${this._t("Two water zones · individual room control")}</p></div><div class="hero-actions"><span class="count">${this._t("Fans running")}: ${model.running_fans || 0} / ${rooms.length}</span><button type="button" data-add-room>${this._t("Add room")}</button></div></div>
         ${this._error ? `<p class="error alert" role="alert">${esc(this._error)}</p>` : ""}
         ${model.startup_fault ? `<p class="error alert" role="alert">${esc(this._t(model.startup_fault))}</p>` : ""}
+        ${this._comfort(model)}
+        <div data-home-content ${this._tab !== "home" ? "hidden" : ""}>
         ${model.mode === "Adaptive" ? model.zones.filter(zone => zone.backup_active).map(zone => `<div class="alert backup-alert" role="alert" data-backup-zone="${esc(zone.id)}"><strong>${this._t("Backup sensor active")}</strong><p>${esc(this._t("Backup explanation", {zone:zone.name, source:zone.backup_source_name}))}</p></div>`).join("") : ""}
-        <div class="main-controls"><div class="modes" role="group" aria-label="${this._t("Heating mode")}">${["Off", "Manual", "Adaptive"].map(mode => `<button type="button" data-mode="${mode}" class="${model.mode === mode ? "active" : ""}" aria-pressed="${model.mode === mode}" ${this._pending ? "disabled" : ""}>${this._t(mode)}</button>`).join("")}</div>${this._number("target", this._t("Central target"), settings.target, 5, 35, 0.5, controls.target)}</div>
+        <p class="small">${this._t("Fan-only mode")}</p><div class="main-controls"><div class="modes" role="group" aria-label="${this._t("Heating mode")}">${["Off", "Manual", "Adaptive"].map(mode => `<button type="button" data-mode="${mode}" class="${model.mode === mode ? "active" : ""}" aria-pressed="${model.mode === mode}" ${this._pending ? "disabled" : ""}>${this._t(mode)}</button>`).join("")}</div>${model.comfort?.settings?.migo_entity || model.comfort?.schedule_version ? "" : this._number("target", this._t("Central target"), settings.target, 5, 35, 0.5, controls.target)}</div>
         <p class="explanation">${this._t(model.mode === "Off" ? "All managed fans are requested off." : model.mode === "Manual" ? "Fans run at low speed; the room temperature limit still applies." : "Warm water enables fans. Cold rooms use medium speed, then low as they warm.")} ${this._t("Targets choose speed; the room maximum stops the fan.")}</p>
         <details data-panel="advanced" ${this._open.has("advanced") ? "open" : ""}><summary>${this._t("Advanced settings")}</summary><div class="settings">
           <label class="setting"><span>${this._t("Language")}</span><select data-language aria-label="${this._t("Language")}"><option value="pl" ${this._language === "pl" ? "selected" : ""}>Polski</option><option value="en" ${this._language === "en" ? "selected" : ""}>English</option></select></label>
@@ -234,12 +265,14 @@ class CentralHeatingCard extends HTMLElement {
             <div class="room-list">${members.length ? members.map(room => this._room(room)).join("") : `<div class="empty">${this._t("No rooms instruction")}</div>`}</div></section>`;
         }).join("")}</div>
         <p class="footer">${this._t("Footer")}</p>
+        </div>
       </ha-card>`;
     this._bind(model);
     this._clock();
   }
 
   _bind(model) {
+    this._bindComfort(model);
     this.shadowRoot.querySelector("[data-language]").onchange = event => {
       this._language = event.target.value;
       try { localStorage.setItem(`central-heating-language:${this._config.entity}`, this._language); } catch (_) { /* Keep the selection for this session. */ }
@@ -287,6 +320,89 @@ class CentralHeatingCard extends HTMLElement {
       const cancel = article.querySelector("[data-cancel]");
       if (cancel) cancel.onclick = () => this._call("switch", "turn_off", {entity_id: cancel.dataset.cancel});
     });
+  }
+
+  _comfort(model) {
+    const c = model.comfort || {};
+    const settings = this._comfortDraft || c.settings || {};
+    const entries = this._scheduleDraft || c.schedule || [{day:0,time:"00:00",target:model.settings.target}];
+    const days = this._language === "pl" ? ["Pon","Wt","Śr","Czw","Pt","Sob","Nd"] : ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+    const sensors = Object.keys(this._hass.states).filter(id => id !== settings.migo_entity && !(c.excluded_entities || []).includes(id) && !model.zones.some(zone => zone.sensor === id) && (id.startsWith("climate.") || (id.startsWith("sensor.") && ["°C","°F"].includes(this._hass.states[id].attributes?.unit_of_measurement))));
+    const ambient = Object.entries(Object.keys(settings.room_sensors || {}).length ? settings.room_sensors : Object.fromEntries((model.rooms || []).filter(room=>room.entity_id!==settings.migo_entity).slice(0,6).map(room => [room.entity_id,1])));
+    const option = (id, selected) => `<option value="${esc(id)}" ${id === selected ? "selected" : ""}>${esc(this._hass.states[id]?.attributes?.friendly_name || id)}</option>`;
+    const global = this._globalDraft || {target:c.effective_target ?? model.settings.target,minutes:60};
+    const homes = c.discovery || [];
+    const home = homes.find(home=>home.id===settings.home_id);
+    const nativeSelect = (key,label,rows) => `<label class="setting">${this._t(label)}<select data-comfort-field="${key}"><option value="">—</option>${(rows || []).map(row=>`<option value="${esc(row.id)}" ${row.id===settings[key] ? "selected" : ""}>${esc(row.name)}</option>`).join("")}</select></label>`;
+    const input = (key,label,value,min,max,step=1) => `<label class="setting">${this._t(label)}<input data-comfort-field="${key}" type="number" value="${esc(settings[key] ?? value)}" min="${min}" max="${max}" step="${step}" required></label>`;
+    return `<nav class="tabs" aria-label="${this._t("Central heating")}">${["home","schedule","settings"].map(tab => `<button type="button" data-tab="${tab}" class="${this._tab === tab ? "active" : ""}" aria-pressed="${this._tab === tab}">${this._t(tab[0].toUpperCase()+tab.slice(1))}</button>`).join("")}</nav>
+      <section class="comfort-home" ${this._tab !== "home" ? "hidden" : ""}>
+        <h2>${this._t("Whole-home temperature")}</h2><p class="small">${this._t("Weighted average")}</p><div class="comfort-metric" data-weighted>${this._degrees(c.weighted_temperature)}</div>
+        <div class="comfort-meta"><span>${this._t("Target")} <strong>${this._degrees(c.effective_target ?? model.settings.target)}</strong></span><span>${this._t("Source")}: ${this._t(c.target_source || "Central")}</span><span>${this._t("Ownership")}: <strong>${esc(this._t(c.owner || "miGo"))}</strong></span></div>
+        <p class="small">${this._t("miGo reference (weight 0)")}: ${this._degrees(c.reference_temperature)} · miGo ${this._t("Target")}: ${this._degrees(c.native_target)}${c.requested_output != null ? ` · ${this._t("Proposed output")}: ${this._degrees(c.requested_output)}` : ""}</p>
+        <p class="comfort-status" role="status">${esc(this._t(c.status || "Comfort help"))}${c.saturated ? ` · ${this._t("Output saturated")}` : ""}</p>
+        ${c.native_expires_at ? `<p class="small">${this._t("Native expiry")}: <span data-expires="${c.native_expires_at}"></span></p>` : ""}
+        <div class="comfort-actions"><button type="button" data-comfort-action="enable_correction" ${this._pending ? "disabled" : ""}>${this._t("Enable HA correction")}</button><button type="button" data-comfort-action="relinquish" ${this._pending ? "disabled" : ""}>${this._t("Relinquish to miGo")}</button></div>
+        <details data-panel="global-target" ${this._open.has("global-target") ? "open" : ""}><summary>${this._t("Temporary override")}</summary><div class="global-override"><label class="setting">${this._t("Target")}<input data-global-target type="number" min="7" max="30" step="0.5" value="${global.target}"></label><label class="setting">${this._t("Minutes")}<input data-global-minutes type="number" min="1" max="720" value="${global.minutes}"></label><button type="button" data-global-apply>${this._t("Apply global override")}</button>${c.manual_expires_at ? `<span data-expires="${c.manual_expires_at}"></span><button type="button" data-comfort-action="cancel_global_override">${this._t("Cancel global override")}</button>` : ""}</div></details>
+        <p class="small">${this._t("Local fan-only overrides")}</p>
+      </section>
+      <section class="comfort-pane" data-schedule-pane ${this._tab !== "schedule" ? "hidden" : ""}><h2>${this._t("Schedule")}</h2><p class="small">${this._t("Schedule help")}</p>
+        <p role="status">${this._t("Native schedule")}: ${c.confirmed_version === c.schedule_version && (c.native_schedule_confirmed || c.confirmed_schedule?.length) ? this._t("Confirmed") : this._t("Pending")} · v${c.schedule_version || 0} / ${this._t("Confirmed")} v${c.confirmed_version || 0}</p>
+        <p class="small comfort-status">${esc(this._t(c.status || ""))}</p>
+        <nav class="days" aria-label="${this._t("Schedule")}">${days.map((day,index) => `<button type="button" data-day="${index}" class="${index===this._day ? "active" : ""}" aria-pressed="${index===this._day}">${day}</button>`).join("")}</nav>
+        <div data-schedule-rows>${entries.map((row,index) => row.day !== this._day ? "" : `<div class="schedule-row" data-schedule-index="${index}"><label class="setting">${this._t("Time")}<input type="time" data-schedule-time value="${esc(row.time)}" required></label><label class="setting">${this._t("Target")} °C<input type="number" data-schedule-target min="7" max="30" step="0.5" value="${row.target}" required></label><button type="button" data-schedule-remove aria-label="${this._t("Remove")}">×</button></div>`).join("")}</div>
+        <div class="comfort-actions"><button type="button" data-schedule-add>${this._t("Add transition")}</button><select data-copy-days aria-label="${this._t("Copy day")}"><option value="all">${this._t("All days")}</option><option value="weekdays">${this._t("Weekdays")}</option><option value="weekend">${this._t("Weekend")}</option>${days.map((day,index)=>`<option value="${index}">${day}</option>`).join("")}</select><button type="button" data-schedule-copy>${this._t("Copy day")}</button></div>
+        <div class="comfort-actions"><button type="button" data-comfort-action="prepare_native_schedule">${this._t("Prepare native copy")}</button><button type="button" class="primary" data-schedule-save>${this._t("Save and sync schedule")}</button><button type="button" data-comfort-action="retry_native_schedule">${this._t("Retry native sync")}</button></div>
+      </section>
+      <section class="comfort-pane" data-comfort-settings ${this._tab !== "settings" ? "hidden" : ""}><h2>${this._t("Ambient sensors and weights")}</h2><p class="small">${this._t("Comfort help")}</p>
+        ${Array.from({length:6},(_,index) => `<div class="ambient-row" data-ambient-index="${index}"><label class="setting">${this._t("Ambient sensor")} ${index+1}<select data-ambient-entity><option value="">${this._t("Excluded")}</option>${sensors.map(id=>option(id,ambient[index]?.[0])).join("")}</select></label><label class="setting">${this._t("Weight")}<input type="number" data-ambient-weight min="0" max="100" step="0.1" value="${ambient[index]?.[1] ?? 1}"></label></div>`).join("")}
+        <div class="comfort-grid"><label class="setting">${this._t("miGo thermostat")}<select data-comfort-field="migo_entity"><option value="">${this._t("Excluded")}</option>${Object.keys(this._hass.states).filter(id=>id.startsWith("climate.")).map(id=>option(id,settings.migo_entity)).join("")}</select></label>
+        ${input("minimum","Minimum output °C",18,7,30,0.5)}${input("maximum","Maximum output °C",24,7,30,0.5)}${input("manual_minutes","Shared native duration (minutes)",60,5,720)}</div><div class="comfort-actions"><button type="button" data-native-discover>${this._t("Discover native schedules")}</button></div>${homes.length ? `<div class="comfort-grid">${nativeSelect("home_id","Home ID",homes)}${nativeSelect("room_id","Room ID",home?.rooms)}${nativeSelect("schedule_id","Source schedule ID",home?.schedules)}</div>` : ""}<p class="small">${this._t("Native duration help")}</p>
+        <details data-panel="comfort-advanced" ${this._open.has("comfort-advanced") ? "open" : ""}><summary>${this._t("Advanced settings")}</summary><div class="comfort-grid">
+          ${homes.length ? "" : ["home_id","room_id","schedule_id"].map((key,index)=>`<label class="setting">${this._t(["Home ID","Room ID","Source schedule ID"][index])}<input data-comfort-field="${key}" value="${esc(settings[key] || "")}"></label>`).join("")}
+          ${input("poll_seconds","Reference polling (seconds)",60,60,3600)}${input("correction_seconds","Correction interval (seconds)",600,600,7200)}${input("freshness_seconds","Maximum sensor age (seconds)",900,60,86400)}${input("coverage","Required weighted coverage",1,0.1,1,0.1)}${input("smoothing_seconds","Output smoothing (seconds)",60,0,1800)}${input("hysteresis","Quantization hysteresis °C",0.05,0,0.2,0.01)}</div></details>
+        <div class="comfort-actions"><button type="button" class="primary" data-comfort-save>${this._t("Save comfort settings")}</button></div>
+      </section>`;
+  }
+
+  _bindComfort(model) {
+    const root = this.shadowRoot;
+    root.querySelectorAll("[data-tab]").forEach(button=>button.onclick=()=>{this._tab=button.dataset.tab;this._render(true);});
+    root.querySelectorAll("[data-day]").forEach(button=>button.onclick=()=>{this._day=Number(button.dataset.day);this._render(true);});
+    const draft = () => this._scheduleDraft ||= structuredClone(model.comfort?.schedule || [{day:0,time:"00:00",target:model.settings.target}]);
+    root.querySelectorAll("[data-schedule-index]").forEach(row=>{
+      const index=Number(row.dataset.scheduleIndex);
+      row.querySelector("[data-schedule-time]").oninput=event=>{draft()[index].time=event.target.value;};
+      row.querySelector("[data-schedule-target]").oninput=event=>{draft()[index].target=Number(event.target.value);};
+      row.querySelector("[data-schedule-remove]").onclick=()=>{draft().splice(index,1);this._render(true);};
+    });
+    root.querySelector("[data-schedule-add]").onclick=()=>{draft().push({day:this._day,time:"06:00",target:22});this._render(true);};
+    root.querySelector("[data-schedule-copy]").onclick=()=>{
+      const destination=root.querySelector("[data-copy-days]").value;
+      const days=destination==="all"?[0,1,2,3,4,5,6]:destination==="weekdays"?[0,1,2,3,4]:destination==="weekend"?[5,6]:[Number(destination)];
+      const rows=draft().filter(row=>row.day===this._day);
+      this._scheduleDraft=draft().filter(row=>!days.includes(row.day) || row.day===this._day);
+      days.filter(day=>day!==this._day).forEach(day=>this._scheduleDraft.push(...rows.map(row=>({...row,day}))));
+      this._render(true);
+    };
+    root.querySelector("[data-schedule-save]").onclick=async()=>{if (![...root.querySelectorAll("[data-schedule-rows] input")].every(input=>input.reportValidity())) return; if(await this._call("central_heating","set_schedule",{entries:draft()})){this._scheduleDraft=null;this._render(true);}};
+    root.querySelectorAll("[data-comfort-action]").forEach(button=>button.onclick=()=>this._call("central_heating",button.dataset.comfortAction,{}));
+    const captureGlobal=()=>{this._globalDraft={target:Number(root.querySelector("[data-global-target]").value),minutes:Number(root.querySelector("[data-global-minutes]").value)};};
+    root.querySelectorAll("[data-global-target],[data-global-minutes]").forEach(input=>input.oninput=captureGlobal);
+    root.querySelector("[data-global-apply]").onclick=async()=>{const target=root.querySelector("[data-global-target]"),minutes=root.querySelector("[data-global-minutes]");if(target.reportValidity()&&minutes.reportValidity()&&await this._call("central_heating","set_global_override",{target:Number(target.value),minutes:Number(minutes.value)})){this._globalDraft=null;this._render(true);}};
+    const capture=()=>{
+      const settings={...(model.comfort?.settings || {})};
+      root.querySelectorAll("[data-comfort-field]").forEach(input=>settings[input.dataset.comfortField]=input.type==="number"?Number(input.value):input.value);
+      settings.room_sensors={};
+      root.querySelectorAll("[data-ambient-index]").forEach(row=>{const entity=row.querySelector("[data-ambient-entity]").value;if(entity)settings.room_sensors[entity]=Number(row.querySelector("[data-ambient-weight]").value);});
+      this._comfortDraft=settings;
+      return settings;
+    };
+    root.querySelectorAll("[data-comfort-settings] input,[data-comfort-settings] select").forEach(input=>input.oninput=capture);
+    root.querySelectorAll('[data-comfort-field="home_id"]').forEach(input=>input.onchange=()=>{capture();this._render(true);});
+    root.querySelector("[data-native-discover]").onclick=async()=>{const settings=capture();if(await this._call("central_heating","configure_comfort",{settings}))await this._call("central_heating","discover_comfort",{});};
+    root.querySelector("[data-comfort-save]").onclick=async()=>{if (![...root.querySelectorAll("[data-comfort-settings] input")].every(input=>input.reportValidity())) return; const settings=capture();if(await this._call("central_heating","configure_comfort",{settings})){this._comfortDraft=null;this._render(true);}};
+    root.querySelector("[data-comfort-settings]").append(root.querySelector('[data-panel="advanced"]'));
   }
 
   _draft(article) {

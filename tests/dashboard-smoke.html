@@ -6,11 +6,12 @@
 <style>
   :root{--primary-text-color:#172331;--secondary-text-color:#546473;--card-background-color:#fff;--secondary-background-color:#f0f4f7;--divider-color:#d3dce3;--primary-color:#176ba0;--text-primary-color:#fff}
   body{margin:0;background:#e8eef2;font-family:Arial,sans-serif}
+  #fixture-surface{display:block;width:100vw;min-width:0}
 </style>
 <script type="module" src="../custom_components/central_heating/www/central-heating-card.js"></script>
 <!-- Duplicate evaluation exercises cached/updated resources without global collisions. -->
 <script type="module" src="../custom_components/central_heating/www/central-heating-card.js?v=second-load"></script>
-<body><script type="module">
+<body><main id="fixture-surface"></main><script type="module">
 (async () => {
   const assert = (condition, message) => { if (!condition) throw new Error(message); };
   const now = Date.now() / 1000;
@@ -40,11 +41,33 @@
     } else if (domain === "switch") {
       Object.assign(room,{override:false,effective_target:22,target_source:"Central",override_expires_at:null});
     } else if (domain === "number") model.settings.target = data.value;
+    else if (service === "set_global_override") Object.assign(model.comfort,{manual_target:data.target,effective_target:data.target,manual_expires_at:Date.now()/1000+data.minutes*60,target_source:"Manual"});
+    else if (service === "set_schedule") Object.assign(model.comfort,{schedule:structuredClone(data.entries),schedule_version:model.comfort.schedule_version+1});
+    else if (service === "configure_comfort") model.comfort.settings=structuredClone(data.settings);
+    else if (service === "discover_comfort") model.comfort.discovery=[{id:"home",name:"Elsnera",rooms:[{id:"room",name:"miGo Living room"}],schedules:[{id:"original",name:"Normal week"}]}];
     card.hass = hass;
   }};
-  document.body.append(card);
+  document.getElementById('fixture-surface').append(card);
   card.hass = hass;
   const find = selector => card.shadowRoot.querySelector(selector);
+  const settledSurface = async () => {
+    // Shadow-root replacement can transiently expose padding-only geometry.
+    // Assert after stable positive layout, never against
+    // a detached/stale surface, and retain the independent overflow check.
+    const expected = Math.min(innerWidth, 1180);
+    assert(expected >= 300, `Browser viewport must be positive (${expected})`);
+    for (let attempt = 0; attempt < 30; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 20));
+      document.documentElement.getBoundingClientRect(); // flush the complete layout tree
+      const current = find('ha-card');
+      const width = current.getBoundingClientRect().width;
+      const clientWidth = current.clientWidth;
+      await new Promise(resolve => setTimeout(resolve, 20));
+      if (current.isConnected && current === find('ha-card') && !card._pending && width >= expected * 0.9 && clientWidth >= expected * 0.9 && Math.abs(current.getBoundingClientRect().width - width) < 1 && Math.abs(current.clientWidth - clientWidth) < 1) return current;
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+    throw new Error(`Card layout did not settle (${find('ha-card').clientWidth}/${expected})`);
+  };
   assert(find("h1").textContent === "Ogrzewanie centralne","Polish is the deployment default");
   assert(find('.water').textContent.includes("Wygładzona temperatura wody"),"Polish describes temperature smoothing");
   assert(find('.reason').textContent.includes("Oczekiwanie na ciepłą wodę"),"Decision reasons are translated");
@@ -126,12 +149,52 @@
   Object.assign(model.zones[0], {backup_active:false,sensor_issue:null,sensor_fault:false});
   card.hass = hass;
   assert(!find('[data-backup-zone]'),"Recovery clears the backup warning");
-  await new Promise(resolve => setTimeout(resolve, 50));
-  const surface = card.shadowRoot.querySelector('ha-card');
+  const surface = await settledSurface();
   assert(surface.scrollWidth <= surface.clientWidth + 1,`Polish controls fit the viewport (${surface.scrollWidth}/${surface.clientWidth})`);
+  Object.assign(hass.states,{
+    "sensor.ambient":{attributes:{friendly_name:"Bedroom ambient",unit_of_measurement:"°C"}},
+    "sensor.migo_alias":{attributes:{friendly_name:"miGo ambient",unit_of_measurement:"°C"}},
+    "climate.migo":{attributes:{friendly_name:"miGo thermostat",current_temperature:21}},
+  });
+  model.comfort={settings:{room_sensors:{"sensor.ambient":1},migo_entity:"climate.migo",home_id:"home",room_id:"room",schedule_id:"original",minimum:18,maximum:24,manual_minutes:60,poll_seconds:60,correction_seconds:600,freshness_seconds:900,coverage:1,smoothing_seconds:60,hysteresis:0.05},
+    schedule:[{day:0,time:"00:00",target:22}],schedule_version:1,confirmed_version:1,confirmed_schedule:[{day:0,time:"00:00",target:22}],weighted_temperature:21.2,effective_target:22,target_source:"Schedule",owner:"HA",reference_temperature:21,native_target:20,requested_output:21,status:"Waiting for 10-minute actuator limiter",excluded_entities:["sensor.migo_alias","sensor.upstairs"]};
+  card.hass=hass;
+  assert(find('[data-weighted]').textContent==='21.2°C',"Home shows weighted room average");
+  assert(!find('.main-controls [data-key="target"]'),"Configured whole-home target has no duplicate legacy control");
+  assert(find('.comfort-home').textContent.includes('miGo Target: 20.0°C')&&find('.comfort-home').textContent.includes('Proposed output: 21.0°C'),"Actual native target is distinct from limited proposal");
+  let globalTarget=find('[data-global-target]'),globalMinutes=find('[data-global-minutes]');
+  globalTarget.value='23';globalTarget.dispatchEvent(new Event('input'));globalMinutes.value='90';globalMinutes.dispatchEvent(new Event('input'));
+  find('[data-tab="schedule"]').click();find('[data-tab="home"]').click();
+  assert(find('[data-global-target]').value==='23'&&find('[data-global-minutes]').value==='90',"Global draft survives tab changes");
+  await find('[data-global-apply]').onclick();
+  assert(calls.at(-1).service==='set_global_override'&&calls.at(-1).data.minutes===90,"Global target and duration apply together");
+  find('[data-tab="schedule"]').click();
+  let scheduleTarget=find('[data-schedule-target]');scheduleTarget.value='22.5';scheduleTarget.dispatchEvent(new Event('input'));
+  find('[data-copy-days]').value='all';find('[data-schedule-copy]').click();
+  find('[data-day="1"]').click();assert(find('[data-schedule-target]').value==='22.5',"Copy day populates Tuesday");
+  find('[data-tab="settings"]').click();find('[data-tab="schedule"]').click();
+  assert(find('[data-schedule-target]').value==='22.5',"Schedule draft survives tab changes");
+  await find('[data-schedule-save]').onclick();
+  assert(calls.at(-1).service==='set_schedule'&&calls.at(-1).data.entries.length===7&&calls.at(-1).data.entries.every(row=>row.target===22.5),"Schedule service receives real weekly desired values");
+  assert(find('[data-schedule-pane]').textContent.includes('Pending'),"Unconfirmed native sync remains visibly pending");
+  find('[data-tab="settings"]').click();
+  assert(card.shadowRoot.querySelectorAll('[data-ambient-index]').length===6,"Six weighted ambient sensor selectors");
+  assert(!find('[data-ambient-entity] option[value="sensor.migo_alias"]'),"miGo ambient aliases excluded from selectable average");
+  assert(find('[data-comfort-field="correction_seconds"]').min==='600',"UI cannot configure faster automatic corrections");
+  await find('[data-native-discover]').onclick();
+  assert(find('[data-comfort-field="home_id"] option[value="home"]').textContent==='Elsnera',"Native IDs can be selected by readable names");
+  const weight=find('[data-ambient-weight]');weight.value='2';weight.dispatchEvent(new Event('input'));
+  find('[data-tab="home"]').click();find('[data-tab="settings"]').click();
+  assert(find('[data-ambient-weight]').value==='2',"Weight draft survives tabs");
+  await find('[data-comfort-save]').onclick();
+  assert(calls.at(-1).service==='configure_comfort'&&calls.at(-1).data.settings.room_sensors['sensor.ambient']===2,"Sensor weights save atomically");
+  for(const tab of ['home','schedule','settings']){
+    find(`[data-tab="${tab}"]`).click();const panel=await settledSurface();
+    assert(panel.scrollWidth<=panel.clientWidth+1,`Comfort ${tab} fits viewport (${panel.scrollWidth}/${panel.clientWidth})`);
+  }
   localStorage.removeItem('central-heating-language:sensor.heating');
   document.body.dataset.result = "pass";
-  document.body.dataset.checks = "31";
+  document.body.dataset.checks = "49";
 })().catch(error => {
   document.body.dataset.result = "fail";
   document.body.dataset.error = error.message;

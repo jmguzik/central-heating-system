@@ -28,3 +28,69 @@ set_room_override:
             - 1 hour
             - 2 hours
             - Until cancelled
+
+configure_comfort:
+  name: Configure whole-home comfort
+  description: Validate and save sensor weights, miGo mapping, bounds and tuning. A changed shared native duration is applied only while HA owns control.
+  fields:
+    settings:
+      name: Settings object
+      required: true
+      example: '{"room_sensors":{"sensor.bedroom_temperature":1},"minimum":18,"maximum":24,"manual_minutes":60}'
+
+discover_comfort:
+  name: Discover miGo homes and schedules
+  description: Read names and IDs from the configured miGo integration. No actuator writes.
+
+prepare_native_schedule:
+  name: Prepare dedicated native schedule copy
+  description: Explicitly create an HA-owned thermal copy and verify that original/DHW schedules are unchanged. Does not activate it.
+
+set_schedule:
+  name: Save and synchronize weekly schedule
+  description: Write uncorrected desired weekly temperatures to the prepared native copy and verify read-back. Failures remain pending.
+  fields:
+    entries:
+      name: Weekly transitions
+      required: true
+      example: '[{"day":0,"time":"00:00","target":20},{"day":0,"time":"07:00","target":22}]'
+
+retry_native_schedule:
+  name: Retry native schedule synchronization
+  description: Recover/verify a persisted pending write or retry against an unchanged native baseline.
+
+set_global_override:
+  name: Set timed whole-home target
+  description: Override the weekly global target. Native temperature changes still obey the ten-minute cadence and 0.5°C slew; no independent native TTL is supplied.
+  fields:
+    target:
+      name: Target
+      required: true
+      selector:
+        number:
+          min: 7
+          max: 30
+          step: 0.5
+          unit_of_measurement: °C
+    minutes:
+      name: Global target duration
+      default: 60
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 720
+          step: 1
+          unit_of_measurement: min
+
+cancel_global_override:
+  name: Cancel timed whole-home target
+  description: Restore the current weekly target without bypassing the native actuator limiter.
+
+enable_correction:
+  name: Enable HA comfort correction
+  description: Explicitly select the confirmed fallback copy, set/verify shared duration and take HA ownership. Requires valid native schedule mode and an in-bounds native target.
+
+relinquish:
+  name: Relinquish to miGo
+  description: Stop HA corrections/renewals and cancel only an identifiable HA-owned room override. Newer native manual/away/frost/off actions are preserved.

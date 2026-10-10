@@ -3,7 +3,7 @@
 from pathlib import Path
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
-import re
+import json
 import shutil
 import subprocess
 import tempfile
@@ -11,7 +11,9 @@ from threading import Thread
 import unittest
 
 BROWSER = shutil.which("google-chrome") or shutil.which("chromium-browser") or shutil.which("chromium")
+NODE = shutil.which("node")
 FIXTURE = Path(__file__).with_name("dashboard-smoke.html").resolve()
+RUNNER = FIXTURE.with_suffix(".mjs")
 
 
 class QuietHandler(SimpleHTTPRequestHandler):
@@ -19,7 +21,7 @@ class QuietHandler(SimpleHTTPRequestHandler):
         pass
 
 
-@unittest.skipUnless(BROWSER, "Chrome/Chromium is required for browser interaction checks")
+@unittest.skipUnless(BROWSER and NODE, "Chrome/Chromium and Node 22+ are required for browser interaction checks")
 class DashboardTests(unittest.TestCase):
     def test_desktop_and_mobile_interactions(self):
         server = ThreadingHTTPServer(("127.0.0.1", 0), partial(QuietHandler, directory=str(FIXTURE.parents[1])))
@@ -29,14 +31,14 @@ class DashboardTests(unittest.TestCase):
             url = f"http://127.0.0.1:{server.server_port}/tests/{FIXTURE.name}"
             for size in ("1280,1000", "390,844"):
                 with self.subTest(size=size), tempfile.TemporaryDirectory(prefix="heating-browser-") as profile:
+                    width, height = size.split(",")
                     result = subprocess.run([
-                        BROWSER, "--headless=new", "--disable-gpu", "--no-first-run",
-                        "--no-default-browser-check", f"--user-data-dir={profile}",
-                        f"--window-size={size}", "--virtual-time-budget=5000", "--dump-dom", url,
-                    ], capture_output=True, text=True, timeout=30)
+                        NODE, str(RUNNER), BROWSER, url, width, height, profile,
+                    ], capture_output=True, text=True, timeout=35)
                     self.assertEqual(result.returncode, 0, result.stderr[-2000:])
-                    error = re.search(r'data-error="([^"]*)"', result.stdout)
-                    self.assertTrue('data-result="pass"' in result.stdout, error.group(1) if error else result.stdout[-500:])
+                    report = json.loads(result.stdout)
+                    self.assertEqual(report.get("result"), "pass", report)
+                    self.assertEqual(report.get("width"), int(width), report)
         finally:
             server.shutdown()
             server.server_close()

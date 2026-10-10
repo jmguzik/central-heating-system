@@ -4,6 +4,7 @@ check:
 	python3 -m unittest discover -s tests -v
 	python3 -m compileall -q custom_components scripts
 	node --check custom_components/central_heating/www/central-heating-card.js
+	node --check tests/dashboard-smoke.mjs
 	bash -n scripts/install.sh
 
 release: check

@@ -17,6 +17,7 @@ async def async_setup_entry(hass, entry, async_add_entities):
 
 class HeatingStatus(HeatingEntity, SensorEntity):
     _attr_icon = "mdi:radiator"
+    _unrecorded_attributes = frozenset({"comfort"})
 
     def __init__(self, controller):
         super().__init__(controller, "status", "Status", "sensor")

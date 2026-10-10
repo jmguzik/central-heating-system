@@ -16,6 +16,7 @@ from homeassistant.helpers.storage import Store
 
 from .const import DOMAIN, OVERRIDE_DURATIONS, RECONCILE_SECONDS, VERSION
 from .logic import Decision, RoomMemory, Settings, decide, room_blocked, temperature
+from .migo import MigoBridge
 from .water import CONFIRM_SECONDS, FAULT_SECONDS, UNAVAILABLE, WaterFilter, select_water_sources
 
 _LOGGER = logging.getLogger(__name__)
@@ -36,6 +37,7 @@ class HeatingController:
         self.entry = entry
         self.zones = {zone["id"]: zone for zone in zones}
         self.settings = Settings()
+        self.comfort = MigoBridge(self)
         self.rooms = {}
         self.memories = {}
         self.gates = {key: False for key in self.zones}
@@ -57,6 +59,7 @@ class HeatingController:
         self._unsubs = []
         self._last_attempt = {}
         self._task = None
+        self._comfort_task = None
         self._dirty = False
         self._started = False
         self._closed = False
@@ -83,6 +86,9 @@ class HeatingController:
         for key in self.gates:
             self.gates[key] = data.get("gates", {}).get(key) is True
         self._seeded = data.get("seeded") is True
+        self.comfort.load(data.get("comfort", {}))
+        if not data.get("comfort"):
+            self.comfort.schedule = [{"day": 0, "time": "00:00", "target": min(30, max(7, self.settings.target))}]
         registry = er.async_get(self.hass)
         labels = lr.async_get(self.hass)
         for zone in self.zones.values():
@@ -114,7 +120,7 @@ class HeatingController:
             for key, zone in self.zones.items():
                 if zone["sensor"] == entity_id:
                     self._observe_water(key, event.data.get("new_state"), event.data.get("last_reported"))
-            if entity_id in water_entities or any(
+            if entity_id in self.comfort.watched_entities or entity_id in water_entities or any(
                 room.entity_id == entity_id for room in self.rooms.values()
             ):
                 self.async_request_reconcile()
@@ -123,7 +129,7 @@ class HeatingController:
 
         @callback
         def water_event(data):
-            return data.get("entity_id") in water_entities
+            return data.get("entity_id") in water_entities | self.comfort.watched_entities
 
         @callback
         def registry_changed(event):
@@ -158,8 +164,17 @@ class HeatingController:
         if self._task and not self._task.done():
             self._task.cancel()
             await asyncio.gather(self._task, return_exceptions=True)
+        if self._comfort_task and not self._comfort_task.done():
+            self._comfort_task.cancel()
+            await asyncio.gather(self._comfort_task, return_exceptions=True)
         if turn_off:
             await asyncio.gather(*(self._turn_off(room.entity_id) for room in self.rooms.values()))
+            if self.comfort.memory.owner in ("HA", "Release pending"):
+                try:
+                    async with asyncio.timeout(15):
+                        await self.comfort.relinquish()
+                except (HomeAssistantError, TimeoutError, ValueError):
+                    self.comfort.memory.owner = "Release pending"
         persistent_notification.async_dismiss(self.hass, f"{DOMAIN}_water_backup")
         await self._store.async_save(self._serialize())
 
@@ -182,6 +197,9 @@ class HeatingController:
         self._publish()
 
     async def async_set_setting(self, key, value):
+        if key == "target" and (self.comfort.settings.migo_entity or self.comfort.memory.schedule_version):
+            await self.comfort.set_manual(value, 60)
+            return
         try:
             updated = replace(self.settings, **{key: value})
             updated.validate()
@@ -230,6 +248,9 @@ class HeatingController:
         await self.async_reconcile_now()
 
     async def async_reconcile_now(self):
+        if self._closed:
+            self._publish()
+            return
         self.async_request_reconcile()
         if self._task is not None:
             await asyncio.shield(self._task)
@@ -251,6 +272,9 @@ class HeatingController:
                 await self._refresh_rooms()
                 self._update_gates()
                 await asyncio.gather(*(self._apply(room) for room in list(self.rooms.values())))
+                # A stalled cloud call must never delay cold-water/Off fan events.
+                if self._comfort_task is None or self._comfort_task.done():
+                    self._comfort_task = self.hass.async_create_task(self._run_comfort(), "central heating comfort")
                 self._publish()
                 data = self._serialize()
                 if data != self._saved:
@@ -260,6 +284,23 @@ class HeatingController:
             self.startup_fault = str(err)
             _LOGGER.exception("Central heating reconciliation failed")
             self._publish()
+
+    async def _run_comfort(self):
+        before = self.settings.target
+        try:
+            await self.comfort.reconcile()
+        except TimeoutError:
+            self.comfort.fault = "miGo request timed out; native expiry is fallback"
+            self.comfort.snapshot["status"] = self.comfort.fault
+        if self._closed:
+            return
+        if before != self.settings.target:
+            self.async_request_reconcile()
+        self._publish()
+        data = self._serialize()
+        if data != self._saved:
+            self._saved = data
+            self._store.async_delay_save(self._serialize, 1)
 
     async def _refresh_rooms(self):
         registry = er.async_get(self.hass)
@@ -386,7 +427,7 @@ class HeatingController:
             _LOGGER.warning("Could not control heating fan %s: %s", room.entity_id, err)
 
     def _serialize(self):
-        return {"settings": self.settings.serialize(), "gates": dict(self.gates), "rooms": {key: memory.serialize() for key, memory in self.memories.items()}, "seeded": self._seeded}
+        return {"settings": self.settings.serialize(), "gates": dict(self.gates), "rooms": {key: memory.serialize() for key, memory in self.memories.items()}, "seeded": self._seeded, "comfort": self.comfort.serialize()}
 
     @callback
     def _publish(self):
@@ -449,6 +490,7 @@ class HeatingController:
             "zones": zone_data,
             "backup_active": any(zone["backup_active"] for zone in zone_data),
             "rooms": room_data,
+            "comfort": dict(self.comfort.snapshot),
             "running_fans": sum(room["reported_mode"] == "fan_only" for room in room_data),
         }
         if self._started:

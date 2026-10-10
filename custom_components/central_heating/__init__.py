@@ -71,6 +71,36 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         vol.Required("target"): vol.All(vol.Coerce(float), vol.Range(min=5, max=35)),
         vol.Required("duration", default="2 hours"): vol.In(OVERRIDE_DURATIONS),
     }))
+    async def comfort_settings(call):
+        await controller.comfort.configure(call.data["settings"])
+
+    async def weekly_schedule(call):
+        await controller.comfort.set_schedule(call.data["entries"])
+
+    async def global_override(call):
+        await controller.comfort.set_manual(call.data["target"], call.data["minutes"])
+
+    hass.services.async_register(DOMAIN, "configure_comfort", comfort_settings,
+                                 schema=vol.Schema({vol.Required("settings"): dict}))
+    hass.services.async_register(DOMAIN, "set_schedule", weekly_schedule,
+                                 schema=vol.Schema({vol.Required("entries"): list}))
+    hass.services.async_register(DOMAIN, "set_global_override", global_override,
+                                 schema=vol.Schema({vol.Required("target"): vol.Coerce(float), vol.Required("minutes", default=60): vol.Coerce(int)}))
+    for name, action in {
+        "cancel_global_override": controller.comfort.cancel_manual,
+        "prepare_native_schedule": controller.comfort.prepare_schedule,
+        "retry_native_schedule": controller.comfort.retry_schedule,
+        "discover_comfort": controller.comfort.discover,
+        "enable_correction": controller.comfort.enable,
+        "relinquish": controller.comfort.relinquish,
+    }.items():
+        async def invoke(call, action=action):
+            try:
+                await action()
+            except (ValueError, TimeoutError) as err:
+                from homeassistant.exceptions import ServiceValidationError
+                raise ServiceValidationError(str(err)) from err
+        hass.services.async_register(DOMAIN, name, invoke, schema=vol.Schema({}))
     await async_register_card(hass)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     controller.async_start()
@@ -82,5 +112,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
         await entry.runtime_data.async_stop(turn_off=True)
         hass.services.async_remove(DOMAIN, "set_room_override")
+        for name in ("configure_comfort", "set_schedule", "set_global_override", "cancel_global_override", "prepare_native_schedule", "retry_native_schedule", "discover_comfort", "enable_correction", "relinquish"):
+            hass.services.async_remove(DOMAIN, name)
         return True
     return False
