@@ -27,7 +27,7 @@ class ComfortSettings:
     def validate(self, water_entities=()):
         bounds = {
             "minimum": (7, 30), "maximum": (7, 30), "manual_minutes": (5, 720),
-            "poll_seconds": (60, 3600), "correction_seconds": (600, 7200),
+            "poll_seconds": (60, 3600), "correction_seconds": (60, 7200),
             "freshness_seconds": (60, 86400), "coverage": (0.1, 1),
             "smoothing_seconds": (0, 1800), "hysteresis": (0, 0.2),
         }
@@ -153,6 +153,9 @@ class ComfortMemory:
     pending_sync: dict = field(default_factory=dict)
     native_timezone: str = ""
     pending_create: dict = field(default_factory=dict)
+    managed_dhw_id: str = ""
+    native_dhw_schedule: dict = field(default_factory=dict)
+    pending_dhw_create: dict = field(default_factory=dict)
     pending_command: bool = False
 
     def serialize(self):
@@ -167,7 +170,7 @@ class ComfortMemory:
 
 
 class Correction:
-    """Elapsed-time smoothing; one 0.5°C actuator step per >=600 seconds."""
+    """Elapsed-time smoothing; one 0.5°C actuator step per configured interval."""
     def __init__(self):
         self.filtered = None
         self.updated_at = None

@@ -77,7 +77,12 @@ const english = {
   "Starting": "Central heating is starting. If this persists, check the integration in Settings.",
 };
 Object.assign(polish, {
-  "Waiting for 10-minute actuator limiter":"Oczekiwanie na 10-minutowy odstęp korekt", "HA correction active":"Korekta HA jest aktywna", "miGo owns native heating":"miGo steruje ogrzewaniem", "Release pending":"Oczekiwanie na oddanie sterowania", "Native schedule sync pending; correction paused":"Synchronizacja harmonogramu miGo oczekuje; korekta wstrzymana",
+  "miGo connection unavailable; retrying automatically":"Brak połączenia z miGo; ponawianie automatyczne co 60 sekund",
+  "Native command confirmation unavailable; miGo retains ownership":"Nie można potwierdzić polecenia; sterowanie pozostaje w miGo",
+  "DHW selection unavailable":"Nie można potwierdzić aktywnego harmonogramu ciepłej wody",
+  "DHW available 24/7":"Ciepła woda dostępna przez całą dobę", "DHW copy prepared; inactive":"Harmonogram ciepłej wody przygotowany, ale nieaktywny", "HA schedule activation help":"Zapis aktywuje harmonogram HA w miGo i odblokowuje ciepłą wodę przez całą dobę. Aktywny ręczny nadpis lub tryb nieobecności należy najpierw odwołać w miGo.",
+  "Native DHW schedule changed; miGo owns heating":"Zmieniono harmonogram ciepłej wody w miGo; sterowanie pozostaje w miGo", "Cancel native override before activating HA schedules":"Przed aktywacją harmonogramu HA odwołaj ręczną nastawę w miGo", "Exit native away/frost/DHW mode before activating HA schedules":"Przed aktywacją harmonogramu HA wyłącz w miGo tryb nieobecności, przeciwzamrożeniowy lub samej ciepłej wody",
+  "Waiting for actuator limiter":"Oczekiwanie na odstęp korekt ({seconds} s)", "HA correction active":"Korekta HA jest aktywna", "miGo owns native heating":"miGo steruje ogrzewaniem", "Release pending":"Oczekiwanie na oddanie sterowania", "Native schedule sync pending; correction paused":"Synchronizacja harmonogramu miGo oczekuje; korekta wstrzymana",
   "Insufficient fresh room coverage or invalid miGo reference; correction paused":"Za mało świeżych odczytów pokojowych lub nieprawidłowy odczyt miGo; korekta wstrzymana", "Native fallback schedule pending; correction paused":"Harmonogram awaryjny miGo oczekuje na potwierdzenie; korekta wstrzymana", "Native thermostat RF unavailable":"Termostat miGo nie ma łączności radiowej", "Native thermostat RF report stale":"Odczyt radiowy termostatu miGo jest nieaktualny", "Native output outside configured bounds; correction paused":"Nastawa miGo poza ustawionymi limitami; korekta wstrzymana", "Native cancellation not confirmed":"Anulowanie nastawy miGo niepotwierdzone",
   "Home":"Dom", "Schedule":"Harmonogram", "Settings":"Ustawienia", "Whole-home temperature":"Temperatura całego domu",
   "Weighted average":"Średnia ważona", "Source":"Źródło", "Ownership":"Sterowanie", "miGo reference (weight 0)":"Odczyt miGo (waga 0)",
@@ -86,19 +91,26 @@ Object.assign(polish, {
   "Native schedule":"Harmonogram miGo", "Pending":"Oczekuje", "Confirmed":"Potwierdzony", "Prepare native copy":"Utwórz osobną kopię w miGo",
   "Save and sync schedule":"Zapisz i wyślij do miGo", "Add transition":"Dodaj zmianę", "Copy day":"Kopiuj dzień", "All days":"Wszystkie dni", "Weekdays":"Pon–Pt", "Weekend":"Sob–Nd",
   "Time":"Godzina", "Remove":"Usuń", "Save comfort settings":"Zapisz ustawienia domu", "Ambient sensors and weights":"Czujniki pokojowe i wagi",
-  "Discover native schedules":"Znajdź dom i harmonogramy miGo", "Proposed output":"Proponowana nastawa", "Fan-only mode":"Tryb samych wentylatorów", "Retry native sync":"Ponów synchronizację miGo",
+  "Discover native schedules":"Znajdź dom i harmonogramy miGo", "Current miGo target":"Aktualna nastawa miGo", "Calculated miGo target":"Pełna wyliczona nastawa", "Next miGo step":"Następny krok miGo", "Fan-only mode":"Tryb samych wentylatorów", "Retry native sync":"Ponów synchronizację miGo",
+  "Calculated target help":"Pełna nastawa = odczyt miGo + (cel domu − średnia ważona), przed wygładzaniem i limitami.",
   "Ambient sensor":"Czujnik pokojowy", "Weight":"Waga", "Excluded":"Wykluczony", "miGo thermostat":"Termostat miGo", "Home ID":"ID domu", "Room ID":"ID pokoju", "Source schedule ID":"ID harmonogramu do skopiowania",
   "Minimum output °C":"Minimalna nastawa °C", "Maximum output °C":"Maksymalna nastawa °C", "Shared native duration (minutes)":"Wspólny czas ręcznej nastawy (minuty)",
   "Reference polling (seconds)":"Odczyt miGo (sekundy)", "Correction interval (seconds)":"Odstęp korekt (sekundy)", "Maximum sensor age (seconds)":"Maksymalny wiek odczytu (sekundy)", "Required weighted coverage":"Wymagane pokrycie wag", "Output smoothing (seconds)":"Wygładzanie korekty (sekundy)", "Quantization hysteresis °C":"Histereza zaokrąglania °C",
   "Local fan-only overrides":"Nastawy pokoju zmieniają tylko lokalny wentylator, nie globalny cel kotła.",
   "Schedule help":"Poniedziałek 00:00 jest początkiem tygodnia. Cel obowiązuje do następnej zmiany. Kopiowanie zastępuje wybrane dni. Do miGo wysyłany jest prawdziwy, nieskorygowany plan.",
-  "Comfort help":"Korekta zachowuje modulację miGo. Czujniki wody nie należą do średniej. Zwykła zmiana nastawy: najwyżej 0,5°C co 10 minut, także po zmianie celu ręcznego.",
+  "Comfort help":"Korekta zachowuje modulację miGo. Czujniki wody nie należą do średniej. Zwykła zmiana nastawy: najwyżej 0,5°C co {seconds} sekund, także po zmianie celu ręcznego.",
+  "Correction interval help":"Odstęp korekt: 60–7200 sekund; domyślnie 600 sekund (10 minut). Krótszy odstęp pozwala szybciej zmieniać nastawę i wysyłać więcej poleceń do miGo. Limit pojedynczej zmiany pozostaje 0,5°C.",
   "Native duration help":"To wspólne ustawienie miGo, nie czas osobnego polecenia. Domyślnie proponujemy 60 minut. Zmiana następuje tylko przy włączeniu korekty lub zapisie zmienionego czasu. Po awarii HA miGo wraca do wysłanego planu po upływie potwierdzonej nastawy.",
 });
 Object.assign(english, {
+  "miGo connection unavailable; retrying automatically":"miGo connection unavailable; retrying automatically every 60 seconds",
+  "Waiting for actuator limiter":"Waiting for correction interval ({seconds} s)",
+  "Calculated target help":"Full target = miGo reading + (home target − weighted average), before smoothing and limits.",
+  "HA schedule activation help":"Saving activates the HA schedule in miGo and makes hot water available 24/7. First cancel any native manual override or away mode in miGo.",
   "Local fan-only overrides":"Room overrides affect only the local fan, not the global boiler target.",
   "Schedule help":"Monday 00:00 starts the week. A target holds until the next transition. Copying replaces the chosen days. miGo receives the real, uncorrected weekly schedule.",
-  "Comfort help":"Correction preserves native miGo modulation. Water sensors are excluded from the average. Ordinary output changes are limited to 0.5°C every 10 minutes, including manual target changes.",
+  "Comfort help":"Correction preserves native miGo modulation. Water sensors are excluded from the average. Ordinary output changes are limited to 0.5°C every {seconds} seconds, including manual target changes.",
+  "Correction interval help":"Correction interval: 60–7200 seconds; default 600 seconds (10 minutes). Shorter intervals allow faster setpoint changes and more commands to miGo. Each change remains limited to 0.5°C.",
   "Native duration help":"This is miGo's shared setting, not a per-command timer. We propose 60 minutes. It changes only on explicit enable or when saving a changed duration. If HA stops, miGo returns to the synced schedule when the confirmed native override expires.",
 });
 
@@ -218,7 +230,7 @@ class CentralHeatingCard extends HTMLElement {
         button,input,select{font:inherit;color:inherit}button,select,summary{cursor:pointer}button:disabled,input:disabled,select:disabled{opacity:.55;cursor:wait}
         button{min-height:44px;border:1px solid var(--divider-color);border-radius:9px;background:var(--card-background-color);padding:8px 14px}
         button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible{outline:3px solid var(--primary-color);outline-offset:2px}
-        .primary,.modes .active{background:var(--primary-color);color:var(--text-primary-color,#fff);border-color:var(--primary-color)}
+        .primary,.modes .active{background:var(--primary-color);color:var(--text-primary-color,#fff);border-color:var(--primary-color)}.comfort-status.retrying{color:var(--warning-color,#b26a00)}
         .hero,.zone-head,.room-head,.override-active{display:flex;align-items:center;justify-content:space-between;gap:12px}.hero{margin-bottom:18px}.hero-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
         .subtitle,.small,.reason,.explanation{color:var(--secondary-text-color);font-size:13px;line-height:1.6}.subtitle{margin-top:5px}.count{font-size:13px;white-space:nowrap}.explanation{margin:14px 0}
         .main-controls{display:flex;gap:24px;align-items:flex-end;flex-wrap:wrap}.modes{display:flex;gap:8px}.modes button{min-width:86px}.setting{display:block;font-size:13px;line-height:1.5}
@@ -324,6 +336,8 @@ class CentralHeatingCard extends HTMLElement {
 
   _comfort(model) {
     const c = model.comfort || {};
+    const owner = c.owner || "miGo";
+    const cadence = {seconds:c.settings?.correction_seconds ?? 600};
     const settings = this._comfortDraft || c.settings || {};
     const entries = this._scheduleDraft || c.schedule || [{day:0,time:"00:00",target:model.settings.target}];
     const days = this._language === "pl" ? ["Pon","Wt","Śr","Czw","Pt","Sob","Nd"] : ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
@@ -339,28 +353,36 @@ class CentralHeatingCard extends HTMLElement {
       <section class="comfort-home" ${this._tab !== "home" ? "hidden" : ""}>
         <h2>${this._t("Whole-home temperature")}</h2><p class="small">${this._t("Weighted average")}</p><div class="comfort-metric" data-weighted>${this._degrees(c.weighted_temperature)}</div>
         <div class="comfort-meta"><span>${this._t("Target")} <strong>${this._degrees(c.effective_target ?? model.settings.target)}</strong></span><span>${this._t("Source")}: ${this._t(c.target_source || "Central")}</span><span>${this._t("Ownership")}: <strong>${esc(this._t(c.owner || "miGo"))}</strong></span></div>
-        <p class="small">${this._t("miGo reference (weight 0)")}: ${this._degrees(c.reference_temperature)} · miGo ${this._t("Target")}: ${this._degrees(c.native_target)}${c.requested_output != null ? ` · ${this._t("Proposed output")}: ${this._degrees(c.requested_output)}` : ""}</p>
-        <p class="comfort-status" role="status">${esc(this._t(c.status || "Comfort help"))}${c.saturated ? ` · ${this._t("Output saturated")}` : ""}</p>
+        <p class="small">${this._t("miGo reference (weight 0)")}: ${this._degrees(c.reference_temperature)}</p>
+        <div class="comfort-meta small">
+          <span data-native-target>${this._t("Current miGo target")}: <strong>${this._degrees(c.native_target)}</strong></span>
+          ${c.raw_output != null ? `<span data-calculated-target>${this._t("Calculated miGo target")}: <strong>${this._degrees(c.raw_output)}</strong></span>` : ""}
+          ${c.requested_output != null ? `<span data-next-step>${this._t("Next miGo step")}: <strong>${this._degrees(c.requested_output)}</strong></span>` : ""}
+        </div>
+        ${c.raw_output != null ? `<p class="small">${this._t("Calculated target help")}</p>` : ""}
+        <p class="comfort-status ${c.connection_retrying ? "retrying" : ""}" role="status">${esc(this._t(c.status || "Comfort help", cadence))}${c.saturated ? ` · ${this._t("Output saturated")}` : ""}</p>
         ${c.native_expires_at ? `<p class="small">${this._t("Native expiry")}: <span data-expires="${c.native_expires_at}"></span></p>` : ""}
-        <div class="comfort-actions"><button type="button" data-comfort-action="enable_correction" ${this._pending ? "disabled" : ""}>${this._t("Enable HA correction")}</button><button type="button" data-comfort-action="relinquish" ${this._pending ? "disabled" : ""}>${this._t("Relinquish to miGo")}</button></div>
+        <div class="comfort-actions"><button type="button" class="${owner === "HA" ? "primary active" : ""}" aria-pressed="${owner === "HA"}" data-comfort-action="enable_correction" ${this._pending ? "disabled" : ""}>${this._t("Enable HA correction")}</button><button type="button" class="${owner === "miGo" ? "primary active" : ""}" aria-pressed="${owner === "miGo"}" data-comfort-action="relinquish" ${this._pending ? "disabled" : ""}>${this._t("Relinquish to miGo")}</button></div>
         <details data-panel="global-target" ${this._open.has("global-target") ? "open" : ""}><summary>${this._t("Temporary override")}</summary><div class="global-override"><label class="setting">${this._t("Target")}<input data-global-target type="number" min="7" max="30" step="0.5" value="${global.target}"></label><label class="setting">${this._t("Minutes")}<input data-global-minutes type="number" min="1" max="720" value="${global.minutes}"></label><button type="button" data-global-apply>${this._t("Apply global override")}</button>${c.manual_expires_at ? `<span data-expires="${c.manual_expires_at}"></span><button type="button" data-comfort-action="cancel_global_override">${this._t("Cancel global override")}</button>` : ""}</div></details>
         <p class="small">${this._t("Local fan-only overrides")}</p>
       </section>
       <section class="comfort-pane" data-schedule-pane ${this._tab !== "schedule" ? "hidden" : ""}><h2>${this._t("Schedule")}</h2><p class="small">${this._t("Schedule help")}</p>
+        <p class="small">${this._t("HA schedule activation help")}</p>
         <p role="status">${this._t("Native schedule")}: ${c.confirmed_version === c.schedule_version && (c.native_schedule_confirmed || c.confirmed_schedule?.length) ? this._t("Confirmed") : this._t("Pending")} · v${c.schedule_version || 0} / ${this._t("Confirmed")} v${c.confirmed_version || 0}</p>
-        <p class="small comfort-status">${esc(this._t(c.status || ""))}</p>
+        ${c.native_dhw_prepared ? `<p class="small">${this._t(c.native_dhw_active == null ? "DHW selection unavailable" : c.native_dhw_active ? "DHW available 24/7" : "DHW copy prepared; inactive")}</p>` : ""}
+        <p class="small comfort-status">${esc(this._t(c.status || "", cadence))}</p>
         <nav class="days" aria-label="${this._t("Schedule")}">${days.map((day,index) => `<button type="button" data-day="${index}" class="${index===this._day ? "active" : ""}" aria-pressed="${index===this._day}">${day}</button>`).join("")}</nav>
         <div data-schedule-rows>${entries.map((row,index) => row.day !== this._day ? "" : `<div class="schedule-row" data-schedule-index="${index}"><label class="setting">${this._t("Time")}<input type="time" data-schedule-time value="${esc(row.time)}" required></label><label class="setting">${this._t("Target")} °C<input type="number" data-schedule-target min="7" max="30" step="0.5" value="${row.target}" required></label><button type="button" data-schedule-remove aria-label="${this._t("Remove")}">×</button></div>`).join("")}</div>
         <div class="comfort-actions"><button type="button" data-schedule-add>${this._t("Add transition")}</button><select data-copy-days aria-label="${this._t("Copy day")}"><option value="all">${this._t("All days")}</option><option value="weekdays">${this._t("Weekdays")}</option><option value="weekend">${this._t("Weekend")}</option>${days.map((day,index)=>`<option value="${index}">${day}</option>`).join("")}</select><button type="button" data-schedule-copy>${this._t("Copy day")}</button></div>
         <div class="comfort-actions"><button type="button" data-comfort-action="prepare_native_schedule">${this._t("Prepare native copy")}</button><button type="button" class="primary" data-schedule-save>${this._t("Save and sync schedule")}</button><button type="button" data-comfort-action="retry_native_schedule">${this._t("Retry native sync")}</button></div>
       </section>
-      <section class="comfort-pane" data-comfort-settings ${this._tab !== "settings" ? "hidden" : ""}><h2>${this._t("Ambient sensors and weights")}</h2><p class="small">${this._t("Comfort help")}</p>
+      <section class="comfort-pane" data-comfort-settings ${this._tab !== "settings" ? "hidden" : ""}><h2>${this._t("Ambient sensors and weights")}</h2><p class="small">${this._t("Comfort help", cadence)}</p>
         ${Array.from({length:6},(_,index) => `<div class="ambient-row" data-ambient-index="${index}"><label class="setting">${this._t("Ambient sensor")} ${index+1}<select data-ambient-entity><option value="">${this._t("Excluded")}</option>${sensors.map(id=>option(id,ambient[index]?.[0])).join("")}</select></label><label class="setting">${this._t("Weight")}<input type="number" data-ambient-weight min="0" max="100" step="0.1" value="${ambient[index]?.[1] ?? 1}"></label></div>`).join("")}
         <div class="comfort-grid"><label class="setting">${this._t("miGo thermostat")}<select data-comfort-field="migo_entity"><option value="">${this._t("Excluded")}</option>${Object.keys(this._hass.states).filter(id=>id.startsWith("climate.")).map(id=>option(id,settings.migo_entity)).join("")}</select></label>
         ${input("minimum","Minimum output °C",18,7,30,0.5)}${input("maximum","Maximum output °C",24,7,30,0.5)}${input("manual_minutes","Shared native duration (minutes)",60,5,720)}</div><div class="comfort-actions"><button type="button" data-native-discover>${this._t("Discover native schedules")}</button></div>${homes.length ? `<div class="comfort-grid">${nativeSelect("home_id","Home ID",homes)}${nativeSelect("room_id","Room ID",home?.rooms)}${nativeSelect("schedule_id","Source schedule ID",home?.schedules)}</div>` : ""}<p class="small">${this._t("Native duration help")}</p>
         <details data-panel="comfort-advanced" ${this._open.has("comfort-advanced") ? "open" : ""}><summary>${this._t("Advanced settings")}</summary><div class="comfort-grid">
           ${homes.length ? "" : ["home_id","room_id","schedule_id"].map((key,index)=>`<label class="setting">${this._t(["Home ID","Room ID","Source schedule ID"][index])}<input data-comfort-field="${key}" value="${esc(settings[key] || "")}"></label>`).join("")}
-          ${input("poll_seconds","Reference polling (seconds)",60,60,3600)}${input("correction_seconds","Correction interval (seconds)",600,600,7200)}${input("freshness_seconds","Maximum sensor age (seconds)",900,60,86400)}${input("coverage","Required weighted coverage",1,0.1,1,0.1)}${input("smoothing_seconds","Output smoothing (seconds)",60,0,1800)}${input("hysteresis","Quantization hysteresis °C",0.05,0,0.2,0.01)}</div></details>
+          ${input("poll_seconds","Reference polling (seconds)",60,60,3600)}${input("correction_seconds","Correction interval (seconds)",600,60,7200)}${input("freshness_seconds","Maximum sensor age (seconds)",900,60,86400)}${input("coverage","Required weighted coverage",1,0.1,1,0.1)}${input("smoothing_seconds","Output smoothing (seconds)",60,0,1800)}${input("hysteresis","Quantization hysteresis °C",0.05,0,0.2,0.01)}</div><p class="small">${this._t("Correction interval help")}</p></details>
         <div class="comfort-actions"><button type="button" class="primary" data-comfort-save>${this._t("Save comfort settings")}</button></div>
       </section>`;
   }

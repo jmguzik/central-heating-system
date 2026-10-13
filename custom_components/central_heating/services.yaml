@@ -61,7 +61,7 @@ retry_native_schedule:
 
 set_global_override:
   name: Set timed whole-home target
-  description: Override the weekly global target. Native temperature changes still obey the ten-minute cadence and 0.5°C slew; no independent native TTL is supplied.
+  description: Override the weekly global target. Native temperature changes still obey the configured correction interval and 0.5°C slew; no independent native TTL is supplied.
   fields:
     target:
       name: Target

@@ -157,11 +157,41 @@
     "climate.migo":{attributes:{friendly_name:"miGo thermostat",current_temperature:21}},
   });
   model.comfort={settings:{room_sensors:{"sensor.ambient":1},migo_entity:"climate.migo",home_id:"home",room_id:"room",schedule_id:"original",minimum:18,maximum:24,manual_minutes:60,poll_seconds:60,correction_seconds:600,freshness_seconds:900,coverage:1,smoothing_seconds:60,hysteresis:0.05},
-    schedule:[{day:0,time:"00:00",target:22}],schedule_version:1,confirmed_version:1,confirmed_schedule:[{day:0,time:"00:00",target:22}],weighted_temperature:21.2,effective_target:22,target_source:"Schedule",owner:"HA",reference_temperature:21,native_target:20,requested_output:21,status:"Waiting for 10-minute actuator limiter",excluded_entities:["sensor.migo_alias","sensor.upstairs"]};
+    schedule:[{day:0,time:"00:00",target:22}],schedule_version:1,confirmed_version:1,confirmed_schedule:[{day:0,time:"00:00",target:22}],weighted_temperature:20.7,effective_target:22,target_source:"Schedule",owner:"HA",reference_temperature:22,native_target:22,raw_output:23.3,smoothed_output:23.1,requested_output:22.5,due:false,status:"Waiting for actuator limiter",excluded_entities:["sensor.migo_alias","sensor.upstairs"]};
   card.hass=hass;
-  assert(find('[data-weighted]').textContent==='21.2°C',"Home shows weighted room average");
+  assert(find('[data-weighted]').textContent==='20.7°C',"Home shows weighted room average");
   assert(!find('.main-controls [data-key="target"]'),"Configured whole-home target has no duplicate legacy control");
-  assert(find('.comfort-home').textContent.includes('miGo Target: 20.0°C')&&find('.comfort-home').textContent.includes('Proposed output: 21.0°C'),"Actual native target is distinct from limited proposal");
+  assert(find('[data-native-target]').textContent==='Current miGo target: 22.0°C'&&find('[data-next-step]').textContent==='Next miGo step: 22.5°C',"Actual native target is distinct from the next limited step");
+  assert(find('[data-calculated-target]').textContent==='Calculated miGo target: 23.3°C',"Full raw calculation stays visible while the actuator limiter waits, distinct from smoothing and the next step");
+  assert(find('.comfort-home').textContent.includes('before smoothing and limits'),"Full calculation is not presented as the immediately applied target");
+  const correctionLanguage=find('[data-language]');correctionLanguage.value='pl';correctionLanguage.dispatchEvent(new Event('change'));
+  assert(find('[data-native-target]').textContent==='Aktualna nastawa miGo: 22,0°C'&&find('[data-calculated-target]').textContent==='Pełna wyliczona nastawa: 23,3°C'&&find('[data-next-step]').textContent==='Następny krok miGo: 22,5°C',"Polish distinguishes current, fully calculated and next-step targets");
+  const correctionSurface=await settledSurface();
+  assert(correctionSurface.scrollWidth<=correctionSurface.clientWidth+1,"Polish correction values fit desktop and mobile without horizontal scrolling");
+  model.comfort.raw_output=25.3;model.comfort.saturated=true;card.hass=hass;
+  assert(find('[data-calculated-target]').textContent.includes('25,3°C')&&find('.comfort-status').textContent.includes('Osiągnięto limit korekty'),"An unbounded full calculation retains the visible output-limit warning");
+  delete model.comfort.raw_output;delete model.comfort.requested_output;card.hass=hass;
+  assert(!find('[data-calculated-target]')&&!find('[data-next-step]')&&find('[data-native-target]'),"Unavailable calculations are omitted without inventing a target");
+  Object.assign(model.comfort,{raw_output:23.3,requested_output:22.5,saturated:false});
+  const restoreLanguage=find('[data-language]');restoreLanguage.value='en';restoreLanguage.dispatchEvent(new Event('change'));
+  assert(find('[data-comfort-action="enable_correction"]').getAttribute('aria-pressed')==='true'&&find('[data-comfort-action="enable_correction"]').classList.contains('primary')&&find('[data-comfort-action="relinquish"]').getAttribute('aria-pressed')==='false',"Confirmed HA ownership highlights only the HA correction button");
+  await settledSurface();
+  assert(getComputedStyle(find('[data-comfort-action="enable_correction"]')).backgroundColor!==getComputedStyle(find('[data-comfort-action="relinquish"]')).backgroundColor,"Selected ownership has a visibly different button background");
+  model.comfort.owner='miGo';card.hass=hass;
+  assert(find('[data-comfort-action="relinquish"]').getAttribute('aria-pressed')==='true'&&find('[data-comfort-action="relinquish"]').classList.contains('primary')&&find('[data-comfort-action="enable_correction"]').getAttribute('aria-pressed')==='false',"miGo ownership highlights only the native-control button");
+  await find('[data-comfort-action="enable_correction"]').onclick();
+  assert(find('[data-comfort-action="enable_correction"]').getAttribute('aria-pressed')==='false',"Service success alone does not optimistically claim HA ownership before a state update");
+  model.comfort.owner='Release pending';card.hass=hass;
+  assert([...card.shadowRoot.querySelectorAll('[data-comfort-action="enable_correction"],[data-comfort-action="relinquish"]')].every(button=>button.getAttribute('aria-pressed')==='false'&&!button.classList.contains('primary')),"Pending release does not claim either owner is confirmed");
+  Object.assign(model.comfort,{owner:'HA',connection_retrying:true,status:'miGo connection unavailable; retrying automatically',native_dhw_prepared:true,native_dhw_active:null,reference_temperature:null,native_target:null,raw_output:null,requested_output:null});card.hass=hass;
+  assert(find('[data-comfort-action="enable_correction"]').getAttribute('aria-pressed')==='true'&&find('.comfort-home .comfort-status').classList.contains('retrying')&&find('.comfort-home .comfort-status').textContent.includes('retrying automatically every 60 seconds'),"Outage retains the selected HA button but honestly reports paused automatic reconnection");
+  assert(find('[data-native-target]').textContent.includes('Unavailable')&&!find('[data-calculated-target]')&&!find('[data-next-step]'),"Outage does not display cached data as a fresh correction");
+  assert(find('[data-schedule-pane]').textContent.includes('DHW selection unavailable')&&!find('[data-schedule-pane]').textContent.includes('DHW copy prepared; inactive'),"Unknown native DHW selection is distinct from a confirmed inactive schedule");
+  const retryLanguage=find('[data-language]');retryLanguage.value='pl';retryLanguage.dispatchEvent(new Event('change'));
+  assert(find('.comfort-home .comfort-status').textContent.includes('Brak połączenia z miGo; ponawianie automatyczne co 60 sekund')&&find('[data-comfort-action="enable_correction"]').getAttribute('aria-pressed')==='true',"Polish outage status and selected ownership remain clear on desktop and mobile");
+  const retrySurface=await settledSurface();assert(retrySurface.scrollWidth<=retrySurface.clientWidth+1,"Outage status and selected controls fit without horizontal scrolling");
+  Object.assign(model.comfort,{connection_retrying:false,status:'Waiting for actuator limiter',native_dhw_prepared:false,reference_temperature:22,native_target:22,raw_output:23.3,requested_output:22.5});
+  const retryRestoreLanguage=find('[data-language]');retryRestoreLanguage.value='en';retryRestoreLanguage.dispatchEvent(new Event('change'));
   let globalTarget=find('[data-global-target]'),globalMinutes=find('[data-global-minutes]');
   globalTarget.value='23';globalTarget.dispatchEvent(new Event('input'));globalMinutes.value='90';globalMinutes.dispatchEvent(new Event('input'));
   find('[data-tab="schedule"]').click();find('[data-tab="home"]').click();
@@ -169,6 +199,11 @@
   await find('[data-global-apply]').onclick();
   assert(calls.at(-1).service==='set_global_override'&&calls.at(-1).data.minutes===90,"Global target and duration apply together");
   find('[data-tab="schedule"]').click();
+  model.comfort.native_dhw_prepared=true;model.comfort.native_dhw_active=false;card.hass=hass;
+  assert(find('[data-schedule-pane]').textContent.includes('DHW copy prepared; inactive'),"Prepared DHW copy is not reported as active");
+  model.comfort.native_dhw_active=true;card.hass=hass;
+  assert(find('[data-schedule-pane]').textContent.includes('DHW available 24/7'),"Active DHW availability is visible");
+  assert(find('[data-schedule-pane]').textContent.includes('Saving activates the HA schedule'),"Save activation is explained");
   let scheduleTarget=find('[data-schedule-target]');scheduleTarget.value='22.5';scheduleTarget.dispatchEvent(new Event('input'));
   find('[data-copy-days]').value='all';find('[data-schedule-copy]').click();
   find('[data-day="1"]').click();assert(find('[data-schedule-target]').value==='22.5',"Copy day populates Tuesday");
@@ -180,7 +215,11 @@
   find('[data-tab="settings"]').click();
   assert(card.shadowRoot.querySelectorAll('[data-ambient-index]').length===6,"Six weighted ambient sensor selectors");
   assert(!find('[data-ambient-entity] option[value="sensor.migo_alias"]'),"miGo ambient aliases excluded from selectable average");
-  assert(find('[data-comfort-field="correction_seconds"]').min==='600',"UI cannot configure faster automatic corrections");
+  assert(find('[data-comfort-field="correction_seconds"]').min==='60',"UI allows correction intervals shorter than ten minutes");
+  const interval=find('[data-comfort-field="correction_seconds"]');interval.value='59';
+  assert(!interval.checkValidity(),"UI rejects correction intervals below one minute");
+  interval.value='180';interval.dispatchEvent(new Event('input'));
+  assert(interval.checkValidity(),"UI accepts a three-minute correction interval");
   await find('[data-native-discover]').onclick();
   assert(find('[data-comfort-field="home_id"] option[value="home"]').textContent==='Elsnera',"Native IDs can be selected by readable names");
   const weight=find('[data-ambient-weight]');weight.value='2';weight.dispatchEvent(new Event('input'));
@@ -188,13 +227,22 @@
   assert(find('[data-ambient-weight]').value==='2',"Weight draft survives tabs");
   await find('[data-comfort-save]').onclick();
   assert(calls.at(-1).service==='configure_comfort'&&calls.at(-1).data.settings.room_sensors['sensor.ambient']===2,"Sensor weights save atomically");
+  assert(calls.at(-1).data.settings.correction_seconds===180,"Short correction interval saves in seconds with the other settings");
+  assert(find('[data-comfort-field="correction_seconds"]').value==='180',"Saved short correction interval is retained");
+  assert(find('[data-comfort-settings]').textContent.includes('0.5°C every 180 seconds'),"English help reflects the configured interval");
+  find('[data-tab="home"]').click();
+  assert(find('.comfort-home .comfort-status').textContent==='Waiting for correction interval (180 s)',"English status uses the configured interval instead of ten minutes");
+  const intervalLanguage=find('[data-language]');intervalLanguage.value='pl';intervalLanguage.dispatchEvent(new Event('change'));
+  assert(find('.comfort-home .comfort-status').textContent==='Oczekiwanie na odstęp korekt (180 s)',"Polish status reflects the configured interval");
+  find('[data-tab="settings"]').click();
+  assert(find('[data-comfort-settings]').textContent.includes('0,5°C co 180 sekund'),"Polish help reflects the configured interval");
   for(const tab of ['home','schedule','settings']){
     find(`[data-tab="${tab}"]`).click();const panel=await settledSurface();
     assert(panel.scrollWidth<=panel.clientWidth+1,`Comfort ${tab} fits viewport (${panel.scrollWidth}/${panel.clientWidth})`);
   }
   localStorage.removeItem('central-heating-language:sensor.heating');
   document.body.dataset.result = "pass";
-  document.body.dataset.checks = "49";
+  document.body.dataset.checks = "76";
 })().catch(error => {
   document.body.dataset.result = "fail";
   document.body.dataset.error = error.message;

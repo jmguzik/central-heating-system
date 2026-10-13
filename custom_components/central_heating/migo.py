@@ -16,7 +16,11 @@ from homeassistant.helpers import entity_registry as er
 
 from .comfort import ComfortMemory, ComfortSettings, Correction, validate_schedule, weighted_average
 from .logic import temperature
-from .schedule import build_native, canonical, checked, native_entries, request_schedule, unrelated_schedules, validate_native
+from .schedule import NativeApiUnacknowledged, build_dhw, build_native, canonical, canonical_dhw, checked, checked_body, dhw_gateway, effective_entries, native_entries, request_schedule, unrelated_schedules, validate_native
+
+
+class NativeReadUnavailable(ValueError):
+    """The runtime could not complete a read; no native state was validated."""
 
 
 class MigoBridge:
@@ -35,6 +39,8 @@ class MigoBridge:
         self.config_home = None
         self.last_config_poll = None
         self.last_attempt = None
+        self.next_connection_retry_at = None
+        self._native_write_started = False
         self._lock = asyncio.Lock()
         self.discovery = []
 
@@ -61,10 +67,10 @@ class MigoBridge:
                     raise ValueError("Invalid schedule version")
             if memory.confirmed_version > memory.schedule_version:
                 raise ValueError("Invalid confirmed version")
-            for key in ("native_schedule", "pending_sync", "pending_create"):
+            for key in ("native_schedule", "pending_sync", "pending_create", "native_dhw_schedule", "pending_dhw_create"):
                 if not isinstance(getattr(memory, key), dict):
                     raise ValueError("Invalid stored schedule state")
-            for key in ("managed_schedule_id", "managed_name", "native_timezone"):
+            for key in ("managed_schedule_id", "managed_name", "native_timezone", "managed_dhw_id"):
                 if not isinstance(getattr(memory, key), str):
                     raise ValueError("Invalid managed schedule identity")
             if memory.native_timezone:
@@ -78,6 +84,12 @@ class MigoBridge:
                 validate_schedule(pending["schedule"])
             if memory.pending_create and (set(memory.pending_create) != {"payload", "unrelated"} or not isinstance(memory.pending_create["payload"], dict) or not isinstance(memory.pending_create["unrelated"], dict)):
                 raise ValueError("Invalid pending schedule creation")
+            if memory.pending_dhw_create and (set(memory.pending_dhw_create) != {"payload", "unrelated", "links"}
+                    or not isinstance(memory.pending_dhw_create["payload"], dict) or not isinstance(memory.pending_dhw_create["unrelated"], dict)
+                    or not isinstance(memory.pending_dhw_create["links"], list)):
+                raise ValueError("Invalid pending DHW creation")
+            if bool(memory.managed_dhw_id) != bool(memory.native_dhw_schedule):
+                raise ValueError("Incomplete managed DHW identity")
             if not isinstance(memory.pending_command, bool):
                 raise ValueError("Invalid pending native command")
             if memory.pending_command:
@@ -122,17 +134,27 @@ class MigoBridge:
         entry = entries.async_get_entry(entry_id) if entries and entry_id else None
         if entry is None or entry.domain != "migo_netatmo":
             raise ValueError("Select the installed migo_netatmo climate entity")
-        runtime = entry.runtime_data
+        runtime = getattr(entry, "runtime_data", None)
         api = getattr(runtime, "api", None)
         required = ("get_homes_data", "get_home_status", "set_room_state", "set_manual_setpoint_duration")
-        if api is None or not all(callable(getattr(api, key, None)) for key in required):
+        if api is None:
+            raise NativeReadUnavailable("Native miGo runtime unavailable")
+        if not all(callable(getattr(api, key, None)) for key in required):
             raise ValueError("Unsupported miGo runtime API")
         return api
 
     async def _read(self, api):
         """Never trust cached or optimistic coordinator state for confirmation."""
-        response = checked(await api.get_home_status(self.settings.home_id))
-        home = response.get("body", {}).get("home", {})
+        try:
+            response = await api.get_home_status(self.settings.home_id)
+        except Exception as err:
+            # Do not expose raw cloud errors, which can contain credentials.
+            raise NativeReadUnavailable("Native miGo read unavailable") from err
+        try:
+            body = checked_body(response, "get_home_status")
+        except NativeApiUnacknowledged as err:
+            raise NativeReadUnavailable(str(err)) from err
+        home = body.get("home", {})
         if home.get("id") != self.settings.home_id:
             raise ValueError("miGo returned a different home")
         room = next((room for room in home.get("rooms", []) if room.get("id") == self.settings.room_id), None)
@@ -142,8 +164,15 @@ class MigoBridge:
         return room
 
     async def _read_config(self, api):
-        response = checked(await api.get_homes_data())
-        home = next((home for home in response.get("body", {}).get("homes", []) if home.get("id") == self.settings.home_id), None)
+        try:
+            response = await api.get_homes_data()
+        except Exception as err:
+            raise NativeReadUnavailable("Native miGo read unavailable") from err
+        try:
+            body = checked_body(response, "get_homes_data")
+        except NativeApiUnacknowledged as err:
+            raise NativeReadUnavailable(str(err)) from err
+        home = next((home for home in body.get("homes", []) if home.get("id") == self.settings.home_id), None)
         if home is None:
             raise ValueError("miGo home not found")
         if self.settings.room_id not in {room.get("id") for room in home.get("rooms", [])}:
@@ -172,6 +201,7 @@ class MigoBridge:
                 self.memory = ComfortMemory()
                 self.native_room = self.native_home = self.config_home = None
                 self.last_poll = self.last_config_poll = self.last_attempt = None
+                self.next_connection_retry_at = None
             if self.memory.owner == "HA" and self.native_room and not settings.minimum <= self.native_room.get("therm_setpoint_temperature", 0) <= settings.maximum:
                 self.memory.owner = "Release pending"
                 await self._save()
@@ -183,7 +213,7 @@ class MigoBridge:
         await self.controller.async_reconcile_now()
 
     async def _set_duration(self, api, minutes):
-        checked(await api.set_manual_setpoint_duration(self.settings.home_id, minutes))
+        checked(await api.set_manual_setpoint_duration(self.settings.home_id, minutes), "set_manual_setpoint_duration")
         home = await self._read_config(api)
         if home.get("therm_setpoint_default_duration") != minutes:
             raise ValueError("Shared native duration read-back mismatch")
@@ -191,11 +221,11 @@ class MigoBridge:
 
     async def discover(self):
         async with self._lock:
-            response = checked(await self._api().get_homes_data())
+            body = checked_body(await self._api().get_homes_data(), "get_homes_data")
             self.discovery = [{"id": home["id"], "name": home.get("name", home["id"]), "timezone": home.get("timezone"),
                                "rooms": [{"id": room["id"], "name": room.get("name", room["id"])} for room in home.get("rooms", [])],
                                "schedules": [{"id": item["id"], "name": item.get("name", item["id"])} for item in home.get("schedules", []) if item.get("type") == "therm"]}
-                              for home in response.get("body", {}).get("homes", [])]
+                              for home in body.get("homes", [])]
             self.snapshot["discovery"] = deepcopy(self.discovery)
         self.controller._publish()
 
@@ -207,7 +237,9 @@ class MigoBridge:
             api = self._api()
             home = await self._read_config(api)
             if self.memory.managed_schedule_id:
+                await self._confirm_pending_schedule(home)
                 self._managed(home)
+                await self._ensure_dhw_schedule(api, home)
                 return  # Preparing twice must not import over saved HA edits.
             if not home.get("timezone"):
                 raise ServiceValidationError("Native home timezone unavailable")
@@ -248,7 +280,89 @@ class MigoBridge:
             self.memory.pending_create = {}
             self.fault = None
             await self._save()
+            await self._ensure_dhw_schedule(api, home)
         await self.controller.async_reconcile_now()
+
+    def _managed_dhw(self, home):
+        if not self.memory.managed_dhw_id:
+            return None
+        managed = next((item for item in home.get("schedules", []) if item.get("id") == self.memory.managed_dhw_id), None)
+        if managed is None or managed.get("type") != "event" or canonical_dhw(managed) != self.memory.native_dhw_schedule:
+            raise ValueError("HA DHW schedule changed externally; not overwritten")
+        return managed
+
+    async def _ensure_dhw_schedule(self, api, home):
+        if dhw_gateway(home) is None:
+            return home  # Non-Vaillant native homes have no miGo DHW bridge.
+        if self.memory.managed_dhw_id:
+            self._managed_dhw(home)
+            return home
+        name = self.memory.managed_name
+        if not self.memory.pending_dhw_create:
+            expected = build_dhw(home, self.settings.schedule_id, name)
+            self.memory.pending_dhw_create = {"payload": expected, "unrelated": unrelated_schedules(home, ""),
+                                              "links": deepcopy(home.get("linked_schedules", []))}
+            await self._save()
+        pending = self.memory.pending_dhw_create
+        matches = [item for item in home.get("schedules", []) if item.get("name") == name and item.get("type") == "event"]
+        if not matches:
+            if unrelated_schedules(home, "") != pending["unrelated"] or home.get("linked_schedules", []) != pending["links"]:
+                raise ValueError("Native schedules changed before DHW creation; inspect natively")
+            await request_schedule(api, "createnewhomeschedule", {"home_id": self.settings.home_id, "schedule_type": "event", **pending["payload"]})
+            home = await self._read_config(api)
+            matches = [item for item in home.get("schedules", []) if item.get("name") == name and item.get("type") == "event"]
+        if len(matches) != 1 or not matches[0].get("id") or canonical_dhw(matches[0]) != pending["payload"] or matches[0].get("selected"):
+            raise ValueError("HA DHW schedule creation not confirmed uniquely")
+        managed = matches[0]
+        # Some clients/platforms link pairs on creation; tolerate only our pair.
+        links = [link for link in home.get("linked_schedules", []) if link != {"therm": self.memory.managed_schedule_id, "event": managed["id"]}]
+        if unrelated_schedules(home, managed["id"]) != pending["unrelated"] or links != pending["links"]:
+            raise ValueError("Unrelated native schedule changed during DHW creation; inspect natively")
+        self.memory.managed_dhw_id = managed["id"]
+        self.memory.native_dhw_schedule = canonical_dhw(managed)
+        self.memory.pending_dhw_create = {}
+        await self._save()
+        return home
+
+    def _activation_allowed(self, home, room):
+        if home.get("therm_mode") != "schedule" or home.get("temperature_control_mode", "heating") != "heating":
+            raise ServiceValidationError("Exit native away/frost/DHW mode before activating HA schedules")
+        if room.get("therm_setpoint_mode") not in ("home", "schedule") and not (
+                self.memory.owner == "HA" and room.get("therm_setpoint_mode") == "manual"
+                and self.memory.last_command is not None and self.memory.native_expires_at is not None
+                and temperature(room.get("therm_setpoint_temperature")) == self.memory.last_command
+                and temperature(room.get("therm_setpoint_end_time")) == self.memory.native_expires_at):
+            raise ServiceValidationError("Cancel native override before activating HA schedules")
+
+    async def _activate_schedule(self, api, home):
+        self._managed(home)
+        self._managed_dhw(home)
+        self._activation_allowed(home, await self._read(api))
+        for schedule_id, kind in ((self.memory.managed_schedule_id, "therm"), (self.memory.managed_dhw_id, "event")):
+            if not schedule_id:
+                continue
+            selected = [item["id"] for item in home.get("schedules", []) if item.get("type") == kind and item.get("selected")]
+            if selected == [schedule_id]:
+                continue
+            latest = await self._read_config(api)
+            if latest.get("schedules") != home.get("schedules") or latest.get("linked_schedules", []) != home.get("linked_schedules", []):
+                raise ValueError("Native schedules changed before selection; inspect natively")
+            self._activation_allowed(latest, await self._read(api))
+            home = latest
+            before = {item["id"]: {key: deepcopy(value) for key, value in item.items() if key != "selected"} for item in home["schedules"]}
+            links = deepcopy(home.get("linked_schedules", []))
+            checked(await api.switch_home_schedule(self.settings.home_id, schedule_id), "switch_home_schedule")
+            after = await self._read_config(api)
+            content = {item["id"]: {key: deepcopy(value) for key, value in item.items() if key != "selected"} for item in after["schedules"]}
+            if content != before or after.get("linked_schedules", []) != links or after.get("therm_mode") != home.get("therm_mode") or after.get("temperature_control_mode", "heating") != home.get("temperature_control_mode", "heating"):
+                raise ValueError("Native content/mode changed during selection; inspect natively")
+            home = after
+        self._managed(home)
+        self._managed_dhw(home)
+        for schedule_id, kind in ((self.memory.managed_schedule_id, "therm"), (self.memory.managed_dhw_id, "event")):
+            if schedule_id and [item["id"] for item in home.get("schedules", []) if item.get("type") == kind and item.get("selected")] != [schedule_id]:
+                raise ValueError("HA heating/DHW schedule selection not confirmed uniquely")
+        return home
 
     def _managed(self, home):
         if home.get("timezone") != self.memory.native_timezone:
@@ -260,14 +374,17 @@ class MigoBridge:
             raise ValueError("Native schedule changed externally; not overwritten")
         return managed
 
-    async def _sync_schedule(self, api):
-        home = await self._read_config(api)
+    async def _confirm_pending_schedule(self, home):
+        """Read-only recovery: never retry a write while enabling correction."""
         pending = self.memory.pending_sync
         if pending:
             candidate = next((item for item in home.get("schedules", []) if item.get("id") == self.memory.managed_schedule_id), None)
             if candidate and canonical(candidate) == pending["payload"]:
                 unrelated = unrelated_schedules(home, self.memory.managed_schedule_id)
-                if unrelated != pending["unrelated"] or candidate.get("selected") != pending["selected"] or candidate.get("default") != pending["default"] or candidate.get("type") != "therm":
+                if (home.get("timezone") != self.memory.native_timezone
+                        or effective_entries(native_entries(candidate, self.settings.room_id)) != effective_entries(pending["schedule"])
+                        or unrelated != pending["unrelated"] or candidate.get("selected") != pending["selected"]
+                        or candidate.get("default") != pending["default"] or candidate.get("type") != "therm"):
                     raise ValueError("Unrelated schedule changed; pending sync requires inspection")
                 self.memory.native_schedule = deepcopy(pending["payload"])
                 self.memory.confirmed_schedule = deepcopy(pending["schedule"])
@@ -276,7 +393,13 @@ class MigoBridge:
                 await self._save()
                 if self.memory.confirmed_version == self.memory.schedule_version:
                     self.fault = None
-                    return
+                    return True
+        return False
+
+    async def _sync_schedule(self, api):
+        home = await self._read_config(api)
+        if await self._confirm_pending_schedule(home):
+            return
         managed = self._managed(home)
         payload = build_native(self.schedule, managed, home, self.settings.room_id)
         # Avoid accumulating unused generated custom zones on each edit.
@@ -288,7 +411,7 @@ class MigoBridge:
         await request_schedule(api, "synchomeschedule", {"home_id": self.settings.home_id, "schedule_id": managed["id"], "name": managed["name"], **payload})
         after = await self._read_config(api)
         confirmed = next((item for item in after.get("schedules", []) if item.get("id") == managed["id"]), None)
-        if confirmed is None or canonical(confirmed) != expected or native_entries(confirmed, self.settings.room_id) != self.schedule:
+        if confirmed is None or canonical(confirmed) != expected or effective_entries(native_entries(confirmed, self.settings.room_id)) != effective_entries(self.schedule):
             raise ValueError("Native schedule read-back mismatch; pending")
         if before != unrelated_schedules(after, managed["id"]) or confirmed.get("selected") != managed.get("selected") or confirmed.get("default") != managed.get("default") or confirmed.get("type") != "therm":
             raise ValueError("Unrelated native schedule changed during sync; inspect natively")
@@ -312,7 +435,10 @@ class MigoBridge:
             await self._save()
             try:
                 async with asyncio.timeout(30):
-                    await self._sync_schedule(self._api())
+                    api = self._api()
+                    await self._sync_schedule(api)
+                    home = await self._ensure_dhw_schedule(api, await self._read_config(api))
+                    await self._activate_schedule(api, home)
             except Exception as err:
                 self.fault = str(err)
             await self._save()
@@ -322,7 +448,10 @@ class MigoBridge:
         async with self._lock:
             try:
                 async with asyncio.timeout(30):
-                    await self._sync_schedule(self._api())
+                    api = self._api()
+                    await self._sync_schedule(api)
+                    home = await self._ensure_dhw_schedule(api, await self._read_config(api))
+                    await self._activate_schedule(api, home)
             except Exception as err:
                 self.fault = str(err)
                 raise ServiceValidationError(self.fault) from err
@@ -352,21 +481,21 @@ class MigoBridge:
 
     async def enable(self):
         async with self._lock:
-            if not self.memory.confirmed_schedule or self.memory.confirmed_version != self.memory.schedule_version:
-                raise ServiceValidationError("Confirm the real native fallback schedule before enabling HA correction")
+            if self.memory.owner == "HA":
+                return  # Already selected: never restart its override or duration.
             api = self._api()
             home = await self._read_config(api)
-            managed = self._managed(home)
+            await self._confirm_pending_schedule(home)
+            if not self.memory.confirmed_schedule or self.memory.confirmed_version != self.memory.schedule_version:
+                raise ServiceValidationError("Confirm the real native fallback schedule before enabling HA correction")
+            self._managed(home)
             if not home.get("timezone"):
                 raise ServiceValidationError("Native home timezone unavailable; cannot safely align schedules")
             ZoneInfo(home["timezone"])
             if home.get("therm_mode") != "schedule" or home.get("temperature_control_mode", "heating") != "heating":
                 raise ServiceValidationError("Exit native away/frost/DHW mode before enabling")
-            if not managed.get("selected"):
-                checked(await api.switch_home_schedule(self.settings.home_id, self.memory.managed_schedule_id))
-                home = await self._read_config(api)
-                if not self._managed(home).get("selected"):
-                    raise ServiceValidationError("Managed fallback schedule selection not confirmed")
+            home = await self._ensure_dhw_schedule(api, home)
+            await self._activate_schedule(api, home)
             await self._set_duration(api, self.settings.manual_minutes)
             await self._read(api)
             if self.native_room.get("therm_setpoint_mode") not in ("home", "schedule"):
@@ -378,6 +507,7 @@ class MigoBridge:
             self.memory.native_expires_at = None
             self.memory.pending_command = False
             self.memory.owner = "HA"
+            self.next_connection_retry_at = None
             self.fault = None
             await self._save()
         await self.controller.async_reconcile_now()
@@ -386,6 +516,7 @@ class MigoBridge:
         async with self._lock:
             # Save intent before the network call: a restart retries cancellation.
             self.memory.owner = "Release pending"
+            self.next_connection_retry_at = None
             await self._save()
             try:
                 await self._release(self._api())
@@ -404,7 +535,7 @@ class MigoBridge:
             self.memory.native_expires_at = None
             self.correction.reset()
             return  # Native user state is not ours to cancel.
-        checked(await api.set_room_state(self.settings.home_id, self.settings.room_id, mode="home"))
+        checked(await api.set_room_state(self.settings.home_id, self.settings.room_id, mode="home"), "set_room_state")
         room = await self._read(api)
         if room.get("therm_setpoint_mode") not in ("home", "schedule") or room.get("therm_setpoint_end_time"):
             raise ValueError("Room manual override still active")
@@ -438,8 +569,33 @@ class MigoBridge:
 
     async def reconcile(self):
         async with self._lock:
-            async with asyncio.timeout(30):
-                await self._reconcile()
+            self._native_write_started = False
+            try:
+                async with asyncio.timeout(30):
+                    await self._reconcile()
+            except TimeoutError:
+                if not self._native_write_started and not self.memory.pending_command:
+                    self._connection_unavailable()
+                else:
+                    # A timeout during a write/read-back cannot prove ownership.
+                    # Never blindly replay a mutation or cancel an unknown override.
+                    self.memory.owner = "miGo"
+                    self.next_connection_retry_at = None
+                    self.fault = "Native command confirmation unavailable; miGo retains ownership"
+                    self.snapshot.update(owner=self.memory.owner, status=self.fault, connection_retrying=False)
+                    await self._save()
+
+    def _connection_unavailable(self):
+        """Pause writes, keep the selected owner, and force fresh reads on retry."""
+        self.last_poll = self.last_config_poll = None
+        self.next_connection_retry_at = time() + 60
+        self.correction.reset()
+        self.fault = "miGo connection unavailable; retrying automatically"
+        self.snapshot.update(owner=self.memory.owner, status=self.fault, connection_retrying=True,
+                             next_connection_retry_at=self.next_connection_retry_at,
+                             reference_temperature=None, native_target=None, native_dhw_active=None)
+        for key in ("raw_output", "smoothed_output", "requested_output", "due", "next_correction_at"):
+            self.snapshot.pop(key, None)
 
     async def _reconcile(self):
         now = time()
@@ -453,23 +609,36 @@ class MigoBridge:
         public_memory = {key: getattr(self.memory, key) for key in ("owner", "manual_target", "manual_expires_at", "last_command_at", "last_command", "native_expires_at", "schedule_version", "confirmed_version")}
         self.snapshot = {"settings": self.settings.serialize(), "schedule": deepcopy(self.schedule),
                          **public_memory, "native_schedule_prepared": bool(self.memory.managed_schedule_id), "native_schedule_confirmed": bool(self.memory.confirmed_schedule), "effective_target": target, "target_source": source,
+                         "native_dhw_prepared": bool(self.memory.managed_dhw_id),
                          "weighted_temperature": weighted, "coverage": coverage, "sensors": sensors,
+                         "connection_retrying": self.next_connection_retry_at is not None,
+                         "next_connection_retry_at": self.next_connection_retry_at,
+                         "native_dhw_active": None,
                          "migo_weight": 0, "status": self.fault or "miGo owns native heating", "reference_temperature": None,
                          "excluded_entities": sorted(self.water_entities | self.reference_aliases), "discovery": deepcopy(self.discovery)}
         self.snapshot["timezone"] = self.memory.native_timezone or getattr(self.hass.config, "time_zone", "Europe/Warsaw")
         if not self.settings.migo_entity:
             return
+        if self.next_connection_retry_at is not None and now < self.next_connection_retry_at:
+            return  # Local sensor/fan ticks must not hammer an unavailable cloud.
         try:
+            reconnecting = self.next_connection_retry_at is not None
             api = self._api()
             if self.last_poll is None or now - self.last_poll >= self.settings.poll_seconds:
                 await self._read(api)
             if self.last_config_poll is None or now - self.last_config_poll >= self.settings.poll_seconds:
                 await self._read_config(api)
+            self.next_connection_retry_at = None
+            self.snapshot.update(connection_retrying=False, next_connection_retry_at=None)
+            if reconnecting:
+                self.fault = None
+            self.snapshot["native_dhw_active"] = any(item.get("id") == self.memory.managed_dhw_id and item.get("type") == "event" and item.get("selected") for item in self.config_home.get("schedules", []))
             now = time()
             if self.memory.owner == "Release pending":
                 if self.last_attempt is None or now - self.last_attempt >= 60:
                     self.last_attempt = now
                     await self._release(api)
+                self.snapshot["status"] = self.fault or ("miGo owns native heating" if self.memory.owner == "miGo" else "Release pending")
                 return
             room = self.native_room or {}
             reference = temperature(room.get("therm_measured_temperature"))
@@ -490,6 +659,10 @@ class MigoBridge:
                 self.memory.owner = "miGo"
                 raise ValueError("Native shared duration changed externally; miGo owns heating")
             managed = self._managed(self.config_home)
+            dhw = self._managed_dhw(self.config_home)
+            if dhw is not None and not dhw.get("selected"):
+                self.memory.owner = "miGo"
+                raise ValueError("Native DHW schedule changed; miGo owns heating")
             if not managed.get("selected"):
                 self.memory.owner = "miGo"
                 raise ValueError("Native schedule changed; miGo owns heating")
@@ -524,6 +697,10 @@ class MigoBridge:
                 latest = await self._read(api)
                 latest_config = await self._read_config(api)
                 self._managed(latest_config)
+                dhw = self._managed_dhw(latest_config)
+                if dhw is not None and not dhw.get("selected"):
+                    self.memory.owner = "miGo"
+                    raise ValueError("Native DHW schedule changed before command; miGo owns heating")
                 if latest_config.get("therm_mode") != "schedule" or latest_config.get("temperature_control_mode", "heating") != "heating" or latest_config.get("therm_setpoint_default_duration") != self.settings.manual_minutes or not self._managed(latest_config).get("selected"):
                     self.memory.owner = "miGo"
                     raise ValueError("Native mode/schedule changed before command; miGo owns heating")
@@ -563,7 +740,8 @@ class MigoBridge:
                     await self._save()  # crash-safe conservative command reservation
                 old_expiry = expiry
                 sent_at = time()
-                checked(await api.set_room_state(self.settings.home_id, self.settings.room_id, mode="manual", temp=command))
+                self._native_write_started = True
+                checked(await api.set_room_state(self.settings.home_id, self.settings.room_id, mode="manual", temp=command), "set_room_state")
                 confirmed = await self._read(api)
                 end = temperature(confirmed.get("therm_setpoint_end_time"))
                 if confirmed.get("therm_setpoint_mode") != "manual" or temperature(confirmed.get("therm_setpoint_temperature")) != command or end is None or end <= now + 60:
@@ -582,20 +760,23 @@ class MigoBridge:
                 self.memory.native_expires_at = end
                 await self._save()
             self.fault = None
-            self.snapshot["status"] = "HA correction active" if proposal["due"] else "Waiting for 10-minute actuator limiter"
+            self.snapshot["status"] = "HA correction active" if proposal["due"] else "Waiting for actuator limiter"
         except Exception as err:
-            self.fault = str(err)
-            self.snapshot["status"] = self.fault
-            # Invalid sensing/pending fallback must not retain a stale high bias.
-            # Only cancel our own override, never an externally changed one.
-            if self.memory.owner == "HA" and self.memory.last_command is not None:
-                self.memory.owner = "Release pending"
-                await self._save()
-                try:
-                    await self._release(api)
-                except Exception:
-                    self.fault += "; cancellation pending, native expiry is fallback"
+            if isinstance(err, NativeReadUnavailable) and not self._native_write_started and not self.memory.pending_command:
+                self._connection_unavailable()
+            else:
+                self.fault = str(err)
+                self.snapshot["status"] = self.fault
+                # Invalid sensing/pending fallback must not retain a stale high bias.
+                # Only cancel our own override, never an externally changed one.
+                if self.memory.owner == "HA" and self.memory.last_command is not None:
+                    self.memory.owner = "Release pending"
+                    await self._save()
+                    try:
+                        await self._release(api)
+                    except Exception:
+                        self.fault += "; cancellation pending, native expiry is fallback"
         finally:
             self.snapshot.update({"owner": self.memory.owner, "native_expires_at": self.memory.native_expires_at})
-            self.snapshot["native_target"] = temperature((self.native_room or {}).get("therm_setpoint_temperature"))
+            self.snapshot["native_target"] = None if self.next_connection_retry_at is not None else temperature((self.native_room or {}).get("therm_setpoint_temperature"))
             self.snapshot["status"] = self.fault or self.snapshot["status"]
