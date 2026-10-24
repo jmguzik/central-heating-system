@@ -1,4 +1,4 @@
-"""Central thresholds and optional per-room targets."""
+"""Central thresholds and optional per-room targets and fan limits."""
 
 from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.const import UnitOfTemperature
@@ -17,7 +17,7 @@ CENTRAL_NUMBERS = {
 async def async_setup_entry(hass, entry, async_add_entities):
     controller = entry.runtime_data
     async_add_entities([HeatingNumber(controller, key, *values) for key, values in CENTRAL_NUMBERS.items()])
-    add_room_entities(controller, entry, async_add_entities, [RoomTarget])
+    add_room_entities(controller, entry, async_add_entities, [RoomTarget, RoomMaximum, RoomHysteresis])
 
 
 class HeatingNumber(HeatingEntity, NumberEntity):
@@ -50,3 +50,22 @@ class RoomTarget(HeatingNumber):
     async def async_set_native_value(self, value):
         await self.controller.async_set_room(self.room_key, "target", value)
 
+
+class RoomLimit(HeatingNumber):
+    @property
+    def native_value(self):
+        maximum, gap = self.controller.memories[self.room_key].effective_room_limits(self.controller.settings)
+        return maximum if self.key == "room_maximum" else gap
+
+    async def async_set_native_value(self, value):
+        await self.controller.async_set_room(self.room_key, self.key, value)
+
+
+class RoomMaximum(RoomLimit):
+    def __init__(self, controller, room):
+        super().__init__(controller, "room_maximum", "Room maximum", 5, 35, 0.5, room)
+
+
+class RoomHysteresis(RoomLimit):
+    def __init__(self, controller, room):
+        super().__init__(controller, "room_hysteresis", "Room restart gap", 0.1, 5, 0.1, room)

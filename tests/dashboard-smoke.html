@@ -13,22 +13,30 @@
 <script type="module" src="../custom_components/central_heating/www/central-heating-card.js?v=second-load"></script>
 <body><main id="fixture-surface"></main><script type="module">
 (async () => {
-  const assert = (condition, message) => { if (!condition) throw new Error(message); };
+  let checks = 0;
+  const assert = (condition, message) => { checks++; if (!condition) throw new Error(message); };
   const now = Date.now() / 1000;
   const room = {
     key:"bedroom",entity_id:"climate.bedroom",name:"Bedroom <test>",zone_ids:["upstairs"],
     temperature:21,effective_target:22,custom_target:22,target_source:"Central",override:false,
     override_duration:"2 hours",override_expires_at:null,medium_at_or_below:20.5,low_at_or_above:21.5,
+    room_maximum:24,room_hysteresis:.5,fan_on_temperature:23.5,fan_off_temperature:24,limits_override:false,
+    quiet_enabled:false,quiet_start:"22:00",quiet_end:"07:00",quiet_days:[0,1,2,3,4,5,6],quiet_active:false,
     reported_mode:"off",reported_fan:"low",confirmed:true,reason:"Waiting for warm water",
-    configuration_url:"/config/devices/device/thermostat-one",controls:{override:"switch.bedroom_override"},
+    configuration_url:"/config/devices/device/thermostat-one",controls:{override:"switch.bedroom_override",limits_override:"switch.bedroom_limits",room_maximum:"number.bedroom_maximum",room_hysteresis:"number.bedroom_gap"},
   };
   const model = {
     mode:"Adaptive",settings:{target:22,water_on:33,water_off:30,room_maximum:24,room_hysteresis:.5},
     controls:{mode:"select.heating_mode",target:"number.target",water_on:"number.on",water_off:"number.off",room_maximum:"number.maximum",room_hysteresis:"number.gap"},
-    rooms:[room],running_fans:0,
+    rooms:[room],running_fans:0,timezone:"Europe/Warsaw",
     zones:[{id:"upstairs",name:"Poddasze",label:"heating_poddasze",water_temperature:22,raw_temperature:22,allowed:false,sensor_status:"Waiting for warm water",raw_reported_at:now,accepted_reported_at:now,configuration_url:"/config/devices/device/shelly-one"},
       {id:"downstairs",name:"Piwnica",label:"heating_piwnica",water_temperature:22,raw_temperature:22,allowed:false,sensor_status:"Waiting for warm water",configuration_url:"/config/devices/device/shelly-two"}],
   };
+  Object.assign(room.controls,{temperature:"sensor.renamed_bedroom_temperature",target_temperature:"sensor.bedroom_effective_target",fan_speed:"sensor.bedroom_reported_speed",fan_starts:"sensor.bedroom_starts",low_runtime:"sensor.bedroom_low_hours",medium_runtime:"sensor.bedroom_medium_hours"});
+  Object.assign(model.controls,{weighted_temperature:"sensor.house_average",home_target:"sensor.house_target",native_target:"sensor.migo_target",native_correction:"sensor.migo_delta",average_temperature:"sensor.all_rooms_average",running_fans:"sensor.all_running_fans",low_runtime:"sensor.all_low_hours",medium_runtime:"sensor.all_medium_hours",fan_starts:"sensor.all_fan_starts"});
+  const graphConfigs = [];
+  const graphHelpers = {createCardElement(config) { const graph=document.createElement("div");graph.className="native-graph-stub";graph.config=structuredClone(config);graph.textContent=config.title;graph.style.minHeight="140px";graphConfigs.push(config);return graph; }};
+  window.loadCardHelpers = async () => graphHelpers;
   const calls = [];
   const card = document.createElement("central-heating-card");
   card.setConfig({entity:"sensor.heating"});
@@ -38,8 +46,20 @@
     calls.push({domain,service,data});
     if (service === "set_room_override") {
       Object.assign(room,{override:true,effective_target:data.target,custom_target:data.target,target_source:"Temporary",override_duration:data.duration,override_expires_at:Date.now()/1000+1800});
+    } else if (service === "set_room_quiet_hours") {
+      Object.assign(room,{quiet_enabled:data.enabled,quiet_start:data.start,quiet_end:data.end,quiet_days:[...data.days]});
+    } else if (domain === "switch" && data.entity_id === room.controls.limits_override) {
+      room.limits_override = service === "turn_on";
+      if (!room.limits_override) Object.assign(room,{room_maximum:model.settings.room_maximum,room_hysteresis:model.settings.room_hysteresis});
+      room.fan_off_temperature = room.room_maximum;
+      room.fan_on_temperature = room.room_maximum - room.room_hysteresis;
     } else if (domain === "switch") {
       Object.assign(room,{override:false,effective_target:22,target_source:"Central",override_expires_at:null});
+    } else if (domain === "number" && [room.controls.room_maximum,room.controls.room_hysteresis].includes(data.entity_id)) {
+      room[data.entity_id === room.controls.room_maximum ? "room_maximum" : "room_hysteresis"] = data.value;
+      room.limits_override = true;
+      room.fan_off_temperature = room.room_maximum;
+      room.fan_on_temperature = room.room_maximum - room.room_hysteresis;
     } else if (domain === "number") model.settings.target = data.value;
     else if (service === "set_global_override") Object.assign(model.comfort,{manual_target:data.target,effective_target:data.target,manual_expires_at:Date.now()/1000+data.minutes*60,target_source:"Manual"});
     else if (service === "set_schedule") Object.assign(model.comfort,{schedule:structuredClone(data.entries),schedule_version:model.comfort.schedule_version+1});
@@ -72,6 +92,8 @@
   assert(find('.water').textContent.includes("Wygładzona temperatura wody"),"Polish describes temperature smoothing");
   assert(find('.reason').textContent.includes("Oczekiwanie na ciepłą wodę"),"Decision reasons are translated");
   assert(find('.room-temperature').textContent === "21,0°C","Polish decimal formatting");
+  assert(find('[data-panel="room-limits-bedroom"] summary').textContent.includes("Zaawansowane ustawienia pokoju"),"Advanced room settings are translated");
+  assert(!find('[data-panel="room-limits-bedroom"]').open && !find('[data-room-limits]').checked,"Room limits stay collapsed and inherit globals by default");
   const language = find('[data-language]');
   language.value = 'en';
   language.dispatchEvent(new Event('change'));
@@ -108,6 +130,34 @@
   assert(find("[data-expires]").textContent.includes("remaining"),"Override countdown is shown");
   await find("[data-cancel]").onclick();
   assert(!find("[data-cancel]") && find(".source").textContent === "Central","Cancellation restores inheritance");
+  const limitsPanel = find('[data-panel="room-limits-bedroom"]');
+  assert(limitsPanel.querySelector('[data-key="room_maximum"]').disabled,"Room limit inputs require explicit custom-limits enable");
+  limitsPanel.open = true;
+  limitsPanel.dispatchEvent(new Event("toggle"));
+  let customLimits = find('[data-room-limits]');
+  customLimits.checked = true;
+  await customLimits.onchange();
+  assert(calls.at(-1).domain === "switch" && calls.at(-1).service === "turn_on" && calls.at(-1).data.entity_id === room.controls.limits_override,"Advanced limits switch enables only this room");
+  const maximum = find('[data-panel="room-limits-bedroom"] [data-key="room_maximum"]');
+  assert(!maximum.disabled && maximum.value === "24","Custom limits start at inherited values");
+  await maximum.closest('.stepper').querySelector('[data-step="-0.5"]').onclick();
+  await Promise.resolve();
+  assert(calls.at(-1).data.entity_id === room.controls.room_maximum && calls.at(-1).data.value === 23.5,"Room OFF temperature calls the room number control");
+  const gap = find('[data-panel="room-limits-bedroom"] [data-key="room_hysteresis"]');
+  await gap.closest('.stepper').querySelector('[data-step="0.1"]').onclick();
+  await Promise.resolve();
+  assert(calls.at(-1).data.entity_id === room.controls.room_hysteresis && calls.at(-1).data.value === .6,"Room restart gap supports tenths of a degree");
+  assert(find('[data-fan-thresholds]').textContent.includes("22.9°C") && find('[data-fan-thresholds]').textContent.includes("23.5°C"),"Advanced settings show resulting fan ON and OFF temperatures");
+  assert(model.settings.room_maximum === 24 && model.settings.room_hysteresis === .5 && room.effective_target === 22,"Room limit edits preserve global limits and target");
+  model.settings.room_maximum = 25;
+  card.hass = hass;
+  assert(find('[data-panel="room-limits-bedroom"] [data-key="room_maximum"]').value === "23.5","Custom room limit stays independent of changed globals");
+  assert(find('[data-panel="room-limits-bedroom"]').open,"Advanced room panel stays open across updates");
+  customLimits = find('[data-room-limits]');
+  customLimits.checked = false;
+  await customLimits.onchange();
+  assert(calls.at(-1).service === "turn_off" && calls.at(-1).data.entity_id === room.controls.limits_override,"Turning off custom room limits restores inheritance");
+  assert(find('[data-panel="room-limits-bedroom"] [data-key="room_maximum"]').value === "25" && find('[data-panel="room-limits-bedroom"] [data-key="room_maximum"]').disabled,"Disabling custom limits follows current globals");
   const central = find('[data-key="target"]');
   await central.closest(".stepper").querySelector('[data-step="0.5"]').onclick();
   // Click handlers may initiate an asynchronous native service.
@@ -240,9 +290,83 @@
     find(`[data-tab="${tab}"]`).click();const panel=await settledSurface();
     assert(panel.scrollWidth<=panel.clientWidth+1,`Comfort ${tab} fits viewport (${panel.scrollWidth}/${panel.clientWidth})`);
   }
+  find('[data-tab="home"]').click();
+  const quietLanguage=find('[data-language]');quietLanguage.value='en';quietLanguage.dispatchEvent(new Event('change'));
+  const quietPanel=find('[data-panel="room-limits-bedroom"]');quietPanel.open=true;quietPanel.dispatchEvent(new Event('toggle'));
+  assert(!find('[data-quiet-enabled]').checked&&find('[data-quiet-start]').value==='22:00'&&find('[data-quiet-end]').value==='07:00',"Quiet hours are opt-in with saved overnight defaults");
+  assert(quietPanel.textContent.includes('Europe/Warsaw'),"Quiet hours explain HA timezone");
+  let quietEnabled=find('[data-quiet-enabled]');quietEnabled.checked=true;quietEnabled.dispatchEvent(new Event('change'));
+  let quietStart=find('[data-quiet-start]');quietStart.value='23:15';quietStart.dispatchEvent(new Event('input'));
+  const sunday=find('[data-quiet-day][value="6"]');sunday.checked=false;sunday.dispatchEvent(new Event('change'));
+  quietStart.focus();room.temperature=20.5;card.hass=hass;
+  assert(find('[data-quiet-start]')===quietStart&&quietStart.value==='23:15',"Quiet schedule draft survives live updates while editing");
+  quietStart.blur();find('[data-tab="schedule"]').click();find('[data-tab="home"]').click();
+  assert(find('[data-quiet-start]').value==='23:15'&&find('[data-quiet-enabled]').checked&&!find('[data-quiet-day][value="6"]').checked,"Quiet draft survives tab changes without applying");
+  const quietCalls=calls.length;
+  find('[data-quiet-end]').value='23:15';find('[data-quiet-end]').dispatchEvent(new Event('input'));
+  await find('[data-quiet-save]').onclick();
+  assert(calls.length===quietCalls&&card.shadowRoot.textContent.includes('different start and end'),"Invalid quiet interval sends no service command");
+  find('[data-quiet-end]').value='06:30';find('[data-quiet-end]').dispatchEvent(new Event('input'));
+  const originalService=hass.callService;hass.callService=async()=>{throw new Error('Quiet save failed');};
+  await find('[data-quiet-save]').onclick();
+  assert(find('[data-quiet-start]').value==='23:15'&&find('[role="alert"]').textContent.includes('Quiet save failed'),"Failed quiet save preserves draft and shows error");
+  hass.callService=originalService;await find('[data-quiet-save]').onclick();
+  assert(calls.at(-1).service==='set_room_quiet_hours'&&calls.at(-1).data.entity_id===room.entity_id&&calls.at(-1).data.enabled&&calls.at(-1).data.start==='23:15'&&calls.at(-1).data.end==='06:30'&&calls.at(-1).data.days.join(',')==='0,1,2,3,4,5',"Quiet hours save room, enable, times and days atomically");
+  room.quiet_active=true;room.reason='Quiet hours · low';card.hass=hass;
+  assert(find('[data-quiet-active]')&&find('.reason').textContent.includes('Quiet hours'),"Active quiet period is visible");
+  let polishQuiet=find('[data-language]');polishQuiet.value='pl';polishQuiet.dispatchEvent(new Event('change'));
+  assert(find('[data-quiet-save]').textContent==='Zapisz ciszę nocną'&&find('.reason').textContent.includes('Cisza nocna'),"Quiet controls and reason translate into Polish");
+  const quietSurface=await settledSurface();assert(quietSurface.scrollWidth<=quietSurface.clientWidth+1,"Quiet hours editor fits mobile and desktop");
+  const historyCalls=calls.length;
+  find('[data-tab="history"]').click();await new Promise(resolve=>setTimeout(resolve,20));
+  assert(find('[data-history-mount]').children.length===6,"History creates six native HA graphs");
+  assert(graphConfigs.some(config=>config.type==='history-graph'&&config.entities.some(row=>row.entity==='sensor.renamed_bedroom_temperature')),"Room history uses actual registered entity ID after rename");
+  const currentGraphs=()=>[...find('[data-history-mount]').children].map(node=>node.config);
+  assert(find('[data-history-room]').value===''&&find('[data-history-room]').selectedOptions[0].textContent==='Cały dom',"History defaults to the translated whole home result");
+  assert(!find('select[data-history-range]')&&find('[data-history-range]').textContent==='Ostatnie 12 godzin',"History displays a fixed translated twelve-hour window");
+  assert(currentGraphs().every(config=>config.type==='history-graph'&&config.hours_to_show===12&&!('days_to_show' in config)&&!('stat_types' in config)),"Every chart uses twelve hours of raw history without statistics");
+  assert([model.controls.average_temperature,model.controls.running_fans,model.controls.low_runtime,model.controls.medium_runtime,model.controls.fan_starts].every(entity=>currentGraphs().some(config=>config.entities.some(row=>row.entity===entity))),"Whole home graphs include average temperature and combined fan counters");
+  assert(!currentGraphs().slice(3).some(config=>config.entities.some(row=>row.entity===room.controls.low_runtime||row.entity===room.controls.fan_starts)),"Whole home counters use aggregate sensors instead of one room");
+  assert(find('[data-history-content]').textContent.includes('narastające liczniki')&&!find('[data-history-content]').textContent.includes('Statystyki dzienne'),"History explains cumulative counters without promising daily statistics");
+  assert(find('[data-history-mount]').firstChild.config.title==='Temperatura domu i nastawy',"History titles translate into Polish");
+  const firstGraph=find('[data-history-mount]').firstChild,createdGraphs=graphConfigs.length;
+  model.comfort.weighted_temperature=21.2;const updatedHass={...hass};card.hass=updatedHass;
+  assert(find('[data-history-mount]').firstChild===firstGraph&&graphConfigs.length===createdGraphs&&firstGraph.hass===updatedHass,"History retains native graph instances and updates hass on live changes");
+  model.running_fans=1;card.hass=hass;
+  assert(find('.count').textContent.includes('1 / 1')&&find('[data-history-mount]').firstChild===firstGraph,"History keeps visible fan count fresh while reusing graphs");
+  model.startup_fault='Test startup fault';card.hass=hass;
+  assert([...card.shadowRoot.querySelectorAll('[role="alert"]')].some(node=>node.textContent.includes('Test startup fault')),"Startup faults remain visible while viewing history");
+  model.startup_fault=null;card.hass=hass;
+  assert(!find('[data-history-error]'),"Healthy history shows no maintenance warning");
+  model.history_error='Heating history cleanup unavailable: <test>';card.hass=hass;
+  assert(find('[data-history-error][role="alert"]').textContent.includes('Heating history cleanup unavailable: <test>')&&!find('[data-history-error] test'),"Cached history shows escaped cleanup errors as a visible alert");
+  assert(find('[data-history-mount]').firstChild===firstGraph&&graphConfigs.length===createdGraphs,"History maintenance alerts preserve native graph instances");
+  model.history_error='Exclude heating status sensors from Recorder';card.hass=hass;
+  assert(find('[data-history-error]').textContent.includes('Exclude heating status sensors'),"Cached history refreshes changing maintenance errors");
+  model.history_error=null;card.hass=hass;
+  assert(!find('[data-history-error]')&&find('[data-history-mount]').firstChild===firstGraph,"Resolved history errors disappear while graphs stay cached");
+  model.rooms.push({...room,key:'office',name:'Office',controls:{...room.controls,temperature:'sensor.office_actual',target_temperature:'sensor.office_target',fan_speed:'sensor.office_speed',low_runtime:'sensor.office_low_hours',medium_runtime:'sensor.office_medium_hours',fan_starts:'sensor.office_starts'}});card.hass=hass;
+  await new Promise(resolve=>setTimeout(resolve,20));
+  assert(find('[data-history-room]').value===''&&currentGraphs()[2].entities.some(row=>row.entity==='sensor.office_actual'),"Whole home remains selected and compares every room when a room appears");
+  const historyRoom=find('[data-history-room]');historyRoom.value='office';historyRoom.dispatchEvent(new Event('change'));await new Promise(resolve=>setTimeout(resolve,20));
+  assert(['sensor.office_actual','sensor.office_target','sensor.office_speed','sensor.office_low_hours','sensor.office_medium_hours','sensor.office_starts'].every(entity=>currentGraphs().some(config=>config.entities.some(row=>row.entity===entity))),"Room selector shows the selected room's actual target, speed, runtime and starts");
+  assert(currentGraphs().length===6&&currentGraphs().every(config=>config.type==='history-graph'&&config.hours_to_show===12),"Individual room graphs also use only twelve hours of raw history");
+  const historySurface=await settledSurface();assert(historySurface.scrollWidth<=historySurface.clientWidth+1,"Native graph host fits desktop and mobile");
+  card._cardHelpers=null;window.loadCardHelpers=async()=>{throw new Error('Helpers not ready');};
+  const failedRoom=find('[data-history-room]');failedRoom.value='';failedRoom.dispatchEvent(new Event('change'));await new Promise(resolve=>setTimeout(resolve,20));
+  assert(!find('[data-history-retry]').hidden&&find('[data-history-message]').textContent.length>0,"Unavailable native graph helpers offer retry");
+  window.loadCardHelpers=async()=>graphHelpers;await find('[data-history-retry]').onclick();
+  assert(find('[data-history-mount]').children.length===6&&find('[data-history-retry]').hidden,"History can recover when helpers finish loading");
+  assert(graphConfigs.every(config=>config.type==='history-graph'&&config.hours_to_show===12),"No generated graph ever requests more than twelve hours or statistics");
+  const englishHistory=find('[data-language]');englishHistory.value='en';englishHistory.dispatchEvent(new Event('change'));await new Promise(resolve=>setTimeout(resolve,20));
+  assert(find('[data-history-room]').selectedOptions[0].textContent==='Whole home'&&find('[data-history-range]').textContent==='Last 12 hours'&&find('[data-history-content]').textContent.includes('cumulative counters'),"Whole home selector, fixed window and counter help translate to English");
+  const removedRoom=find('[data-history-room]');removedRoom.value='office';removedRoom.dispatchEvent(new Event('change'));await new Promise(resolve=>setTimeout(resolve,20));
+  model.rooms.pop();card.hass=hass;await new Promise(resolve=>setTimeout(resolve,20));
+  assert(find('[data-history-room]').value===''&&currentGraphs().some(config=>config.entities.some(row=>row.entity===model.controls.fan_starts)),"Removing the selected room returns to whole home totals");
+  assert(calls.length===historyCalls,"Viewing and filtering history sends no heating commands");
   localStorage.removeItem('central-heating-language:sensor.heating');
   document.body.dataset.result = "pass";
-  document.body.dataset.checks = "76";
+  document.body.dataset.checks = String(checks);
 })().catch(error => {
   document.body.dataset.result = "fail";
   document.body.dataset.error = error.message;

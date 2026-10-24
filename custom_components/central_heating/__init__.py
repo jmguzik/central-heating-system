@@ -9,6 +9,7 @@ from homeassistant.helpers import config_validation as cv
 from .const import DOMAIN, OVERRIDE_DURATIONS, PLATFORMS
 from .controller import HeatingController
 from .frontend import async_register_card
+from .history import HistoryRetention
 
 ZONE_SCHEMA = vol.Schema(
     {
@@ -71,6 +72,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         vol.Required("target"): vol.All(vol.Coerce(float), vol.Range(min=5, max=35)),
         vol.Required("duration", default="2 hours"): vol.In(OVERRIDE_DURATIONS),
     }))
+    async def set_room_quiet_hours(call):
+        await controller.async_set_quiet_hours(
+            call.data["entity_id"], call.data["enabled"], call.data["start"], call.data["end"], call.data["days"]
+        )
+
+    hass.services.async_register(DOMAIN, "set_room_quiet_hours", set_room_quiet_hours, schema=vol.Schema({
+        vol.Required("entity_id"): cv.entity_domain("climate"),
+        vol.Required("enabled"): bool,
+        vol.Required("start"): str,
+        vol.Required("end"): str,
+        vol.Required("days"): list,
+    }))
     async def comfort_settings(call):
         await controller.comfort.configure(call.data["settings"])
 
@@ -103,6 +116,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.services.async_register(DOMAIN, name, invoke, schema=vol.Schema({}))
     await async_register_card(hass)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    HistoryRetention(controller).async_start()
     controller.async_start()
     return True
 
@@ -112,6 +126,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
         await entry.runtime_data.async_stop(turn_off=True)
         hass.services.async_remove(DOMAIN, "set_room_override")
+        hass.services.async_remove(DOMAIN, "set_room_quiet_hours")
         for name in ("configure_comfort", "set_schedule", "set_global_override", "cancel_global_override", "prepare_native_schedule", "retry_native_schedule", "discover_comfort", "enable_correction", "relinquish"):
             hass.services.async_remove(DOMAIN, name)
         return True

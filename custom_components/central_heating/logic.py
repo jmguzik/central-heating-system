@@ -1,6 +1,8 @@
 """Heating policy, independent of Home Assistant and device commands."""
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
+from datetime import datetime
+import re
 from math import isfinite
 from typing import Any
 
@@ -61,6 +63,50 @@ class RoomMemory:
     adaptive_fan: str = "low"
     override_duration: str = "2 hours"
     override_expires_at: float | None = None
+    room_maximum: float | None = None
+    room_hysteresis: float | None = None
+
+    quiet_enabled: bool = False
+    quiet_start: str = "22:00"
+    quiet_end: str = "07:00"
+    quiet_days: list[int] = field(default_factory=lambda: list(range(7)))
+
+    @staticmethod
+    def validate_quiet(enabled, start, end, days) -> None:
+        """Validate the complete schedule before any values are applied."""
+        if not isinstance(enabled, bool):
+            raise ValueError("Quiet hours enabled must be a boolean")
+        if any(not isinstance(value, str) or not re.fullmatch(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]", value) for value in (start, end)):
+            raise ValueError("Quiet hours must use HH:MM times")
+        if start == end:
+            raise ValueError("Quiet hours start and end must differ")
+        if not isinstance(days, list) or not days or any(type(day) is not int or day not in range(7) for day in days) or len(set(days)) != len(days):
+            raise ValueError("Choose distinct quiet start days from Monday (0) to Sunday (6)")
+
+    def quiet_active(self, local_now: datetime) -> bool:
+        """Overnight schedules belong to their start day, including after midnight."""
+        if not self.quiet_enabled:
+            return False
+        clock = local_now.strftime("%H:%M")
+        day = local_now.weekday()
+        if self.quiet_start < self.quiet_end:
+            return day in self.quiet_days and self.quiet_start <= clock < self.quiet_end
+        if clock >= self.quiet_start:
+            return day in self.quiet_days
+        return clock < self.quiet_end and (day - 1) % 7 in self.quiet_days
+
+    @property
+    def limits_override(self) -> bool:
+        return self.room_maximum is not None or self.room_hysteresis is not None
+
+    def effective_room_limits(self, settings: Settings) -> tuple[float, float]:
+        """Use central limits for unset or invalid room values."""
+        maximum = temperature(self.room_maximum)
+        gap = temperature(self.room_hysteresis)
+        return (
+            maximum if maximum is not None and 5 <= maximum <= 35 else settings.room_maximum,
+            gap if gap is not None and 0.1 <= gap <= 5 else settings.room_hysteresis,
+        )
 
     def effective_target(self, settings: Settings) -> float:
         value = temperature(self.target)
@@ -97,13 +143,14 @@ def zone_permission(water: float | None, previous: bool, settings: Settings) -> 
     return previous
 
 
-def room_blocked(room: float | None, previous: bool, settings: Settings) -> bool:
+def room_blocked(room: float | None, previous: bool, settings: Settings, memory: RoomMemory | None = None) -> bool:
     """Room cutoff has its own memory, separate from water availability."""
     if room is None or not -40 <= room <= 80:
         return True
-    if room >= settings.room_maximum:
+    maximum, gap = memory.effective_room_limits(settings) if memory is not None else (settings.room_maximum, settings.room_hysteresis)
+    if room >= maximum:
         return True
-    if room <= settings.room_maximum - settings.room_hysteresis:
+    if room <= maximum - gap:
         return False
     return previous
 
@@ -118,6 +165,7 @@ def decide(
     membership_valid: bool = True,
     available: bool = True,
     compatible: bool = True,
+    quiet_active: bool = False,
 ) -> Decision:
     """Choose fan operation; overrides never bypass Off or room protection."""
     if not membership_valid:
@@ -143,6 +191,8 @@ def decide(
         memory.adaptive_fan = "medium"
     elif room >= target - 0.5:
         memory.adaptive_fan = "low"
+    if quiet_active:
+        return Decision("fan_only", "low", "Quiet hours · low")
     if memory.adaptive_fan == "medium":
         return Decision("fan_only", "medium", "Cold room · medium")
     return Decision("fan_only", "low", "Near target · low")

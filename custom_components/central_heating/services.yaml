@@ -94,3 +94,37 @@ enable_correction:
 relinquish:
   name: Relinquish to miGo
   description: Stop HA corrections/renewals and cancel only an identifiable HA-owned room override. Newer native manual/away/frost/off actions are preserved.
+
+set_room_quiet_hours:
+  name: Set room quiet hours
+  description: Limit Adaptive fans to low speed during the room schedule in Home Assistant local time. Overnight hours belong to the selected start day.
+  fields:
+    entity_id:
+      name: Thermostat
+      required: true
+      selector:
+        entity:
+          domain: climate
+    enabled:
+      name: Enabled
+      required: true
+      selector:
+        boolean:
+    start:
+      name: Start (HH:MM)
+      required: true
+      example: '22:00'
+      selector:
+        text:
+    end:
+      name: End (HH:MM)
+      required: true
+      example: '07:00'
+      selector:
+        text:
+    days:
+      name: Start days (Monday 0 to Sunday 6)
+      required: true
+      example: '[0, 1, 2, 3, 4, 5, 6]'
+      selector:
+        object:

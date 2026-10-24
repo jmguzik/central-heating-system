@@ -2,6 +2,28 @@
 
 Central controls and a responsive Home Assistant dashboard for local Tuya fan-coils supplied by two independently monitored heating-water zones. This installation deliberately uses `fan_only` to control fans directly; thermostat setpoints do not determine operation.
 
+## v0.9.1: 12-hour history and whole-home charts
+
+The **History** tab is limited to the last **12 hours**. Its **Cały dom / Whole home** selection shows average and weighted home temperatures, home/native targets, native correction, room temperature comparisons, running fan count, and combined fan starts and low/medium runtime. Select a room to inspect its temperature, target, reported fan speed and counters. Runtime and starts are cumulative counters viewed over this window; removing a room from management removes its contribution to the home totals. They are not gas or electricity measurements.
+
+Heating's generated entities use a separate rolling cleanup policy; the rest of Home Assistant keeps its existing retention settings. Cleanup runs at startup and every five minutes through Recorder's queue, targeting this integration's registered entities, including renamed and disabled entries. It retains **11 hours 50 minutes** at each cleanup to allow headroom before the next run. Database backlog or HA downtime can delay deletion, so this is an operational retention policy, not an exact wall-clock deletion guarantee. The internal Recorder task interface is isolated in `history.py`; incompatibility is logged and displayed in History while fan control continues.
+
+These sensors no longer produce long-term statistics. Existing statistics for this integration's sensors are cleared on startup. Temperature history is rounded to 0.1°C and sampled at most once per minute; sensor faults and recovery remain immediate. A minute baseline keeps steady values visible after old rows are removed. Fan activity and target changes remain immediate. The integration's persistent fan counters remain small scalar totals, without keeping a separate historical time series.
+
+The installer adds the scoped exclusions from [config/recorder.yaml](config/recorder.yaml) to stop recording the rich dashboard status payloads, including their currently renamed IDs. It backs up configuration and rolls back on failed checks. If you already manage `recorder:` yourself, merge these exclusions into that configuration; the installer stops before overwriting unmanaged Recorder options. After subsequently renaming a status entity, add its new ID to the exclusion; History reports missing exclusions. Raw thermostat/Shelly entities provided by other integrations retain their own Recorder policies. Cleanup reuses database pages; it does not repack or promise the database file immediately shrinks.
+
+## v0.9.0: per-room quiet hours and performance history
+
+In each room's **Advanced room settings**, enable **Quiet hours**, choose the start/end times and weekdays, then save. Quiet hours are disabled by default; the proposed schedule is **22:00–07:00** every day. Times use Home Assistant's configured time zone. Selected weekdays identify the start of the period: Monday 22:00–07:00 includes Tuesday morning. During quiet hours an eligible Adaptive fan uses low speed. All existing Off, water and room-limit rules still apply; Manual continues to use low. Schedules and enabled state persist across restarts, independently of room target and limit overrides.
+
+The **History** tab provides native Home Assistant graphs for home temperature against the home/native miGo targets, native correction (native target minus validated reference), room temperature against its effective target, reported fan speed, fan starts, and low/medium runtime. Graphs use the registered entity IDs, including renamed entities, and follow the active HA theme. v0.9.1 adds the whole-home selection and limits the window and retention as described above.
+
+Dedicated sensors provide the graphs without recording the full comfort payload. Data starts accumulating after installation and requires HA Recorder to include these sensors. Fan activity reflects **reported thermostat states**, not physical motor measurements or gas consumption. Starts count observed Off-to-fan transitions; startup and unavailable periods do not invent starts or runtime. Runtime persistence is checkpointed to whole minutes, so an unclean restart can lose less than one minute per speed. This update adds no minimum-on delay or changes to miGo correction behavior.
+
+## v0.8.0: advanced per-room fan limits
+
+Rooms follow the global maximum temperature and restart gap by default. Expand a room's **Advanced room settings** and enable **Use custom room limits** to set its fan OFF temperature and restart gap. The panel shows the resulting fan ON temperature (OFF temperature minus restart gap). Turning custom limits off restores the current global values. Room limits persist across restarts and apply in Manual and Adaptive, independently of timed target overrides. Native room maximum/restart-gap numbers and a custom-limits switch are available for automations.
+
 ## v0.7.5: API read rejection recovery
 
 Unacknowledged native status/configuration responses now follow the read-outage recovery path: keep HA selected, clear cached readings, and retry fresh reads after 60 seconds. Valid acknowledgements with invalid schemas still stop correction, and failed write confirmations remain conservative.
@@ -84,7 +106,7 @@ The central target defaults to **22°C**. With 0.5°C room readings, medium star
 
 Expand a room's **Override target & details**, choose a target and **30 minutes / 1 hour / 2 hours / Until cancelled**, then press **Apply override**. Target and duration are applied together. Temporary overrides show a countdown and **Cancel**; expiry restores the current central target, preserving the saved custom value. **Apply / restart timer** explicitly starts a fresh duration. Deadlines survive HA restarts and overdue overrides expire during startup. Existing permanent overrides from v0.1.0 remain permanent. Native room target, override switch, and duration selector are also available for automations.
 
-In Manual and Adaptive, a room at **24°C** is switched off. It becomes eligible again at **23.5°C**. Water thresholds, central target, room maximum, and restart gap are editable on the dashboard. Mode, overrides, water permission, and room blocks survive restarts. Each room is evaluated independently.
+In Manual and Adaptive, global defaults switch a room off at **24°C** and make it eligible again at **23.5°C**. Rooms follow those global limits unless custom limits are enabled in their collapsed **Advanced room settings** panel. For example, a room maximum of **22°C** with a **1°C** restart gap stops its fan at **22°C** and permits restart at **21°C**. Water permission still applies in Adaptive. Water thresholds, central target, room maximum, and restart gap are editable on the dashboard. Mode, target and limit overrides, water permission, and room blocks survive restarts. Each room is evaluated independently.
 
 | Zone label | Water sensor | Initial rooms |
 | --- | --- | --- |

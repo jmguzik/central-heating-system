@@ -60,6 +60,12 @@
     "switch": {
       "override": {
         "name": "Use custom target"
+      },
+      "limits_override": {
+        "name": "Use custom fan limits"
+      },
+      "quiet_enabled": {
+        "name": "Quiet hours"
       }
     },
     "sensor": {
@@ -79,6 +85,45 @@
       },
       "water_temperature": {
         "name": "{zone} smoothed water temperature"
+      },
+      "weighted_temperature": {
+        "name": "Weighted room temperature"
+      },
+      "home_target": {
+        "name": "Home target temperature"
+      },
+      "native_target": {
+        "name": "miGo target temperature"
+      },
+      "native_correction": {
+        "name": "miGo temperature correction"
+      },
+      "running_fans": {
+        "name": "Running fans"
+      },
+      "target_temperature": {
+        "name": "Effective target temperature"
+      },
+      "fan_speed": {
+        "name": "Reported fan speed",
+        "state": {
+          "off": "Off",
+          "low": "Low",
+          "medium": "Medium",
+          "high": "High"
+        }
+      },
+      "fan_starts": {
+        "name": "Fan starts"
+      },
+      "low_runtime": {
+        "name": "Low speed runtime"
+      },
+      "medium_runtime": {
+        "name": "Medium speed runtime"
+      },
+      "average_temperature": {
+        "name": "Average managed room temperature"
       }
     }
   },
@@ -98,6 +143,27 @@
         "duration": {
           "name": "Duration",
           "description": "30 minutes, 1 hour, 2 hours, or Until cancelled."
+        }
+      }
+    },
+    "set_room_quiet_hours": {
+      "name": "Set room quiet hours",
+      "description": "Limit Adaptive fans to low during the schedule in Home Assistant local time. Days refer to the schedule start.",
+      "fields": {
+        "entity_id": {
+          "name": "Thermostat"
+        },
+        "enabled": {
+          "name": "Enabled"
+        },
+        "start": {
+          "name": "Start (HH:MM)"
+        },
+        "end": {
+          "name": "End (HH:MM)"
+        },
+        "days": {
+          "name": "Start days (Monday 0–Sunday 6)"
         }
       }
     }

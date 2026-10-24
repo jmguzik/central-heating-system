@@ -34,8 +34,8 @@ restore_files() {
 }
 
 awk '/^# BEGIN CENTRAL-HEATING-SYSTEM$/ { managed=1; next } /^# END CENTRAL-HEATING-SYSTEM$/ { managed=0; next } !managed { print }' /config/configuration.yaml > "$backup/base.yaml"
-if grep -Eq '^(central_heating|lovelace):' "$backup/base.yaml"; then
-    printf '%s\n' 'Existing unmanaged central_heating/lovelace configuration found. Merge the dashboard and integration includes before installing.' >&2
+if grep -Eq '^(central_heating|lovelace|recorder):' "$backup/base.yaml"; then
+    printf '%s\n' 'Existing unmanaged central_heating/lovelace/recorder configuration found. Merge the integration, dashboard and config/recorder.yaml exclusions manually before installing; existing Recorder options must be preserved.' >&2
     exit 1
 fi
 
@@ -44,11 +44,19 @@ rm -rf -- /config/custom_components/central_heating
 cp -a "$stage/custom_components/central_heating" /config/custom_components/
 cp "$stage/config/central_heating.yaml" /config/central-heating/config.yaml
 cp "$stage/config/dashboard.yaml" /config/central-heating/dashboard.yaml
+cp "$stage/config/recorder.yaml" /config/central-heating/recorder.yaml
+# Default globs cover new rooms. Preserve exclusions for status sensors already
+# renamed through HA's entity registry, without excluding unrelated sensors.
+if [[ -f /config/.storage/core.entity_registry ]]; then
+    jq -r '.data.entities[] | select(.platform == "central_heating" and (.unique_id | endswith("_status"))) | "    - \(.entity_id)"' \
+        /config/.storage/core.entity_registry >> /config/central-heating/recorder.yaml
+fi
 cp "$backup/base.yaml" /config/configuration.yaml
 cat >> /config/configuration.yaml <<'CONFIG'
 
 # BEGIN CENTRAL-HEATING-SYSTEM
 central_heating: !include central-heating/config.yaml
+recorder: !include central-heating/recorder.yaml
 lovelace:
   dashboards:
     central-heating:
@@ -90,9 +98,27 @@ for attempt in {1..60}; do
     fi
     if [[ -n "$access_token" ]] && curl -fsS --max-time 5 -H "Authorization: Bearer $access_token" \
         "$api_url/api/states/sensor.central_heating_status" -o "$backup/runtime-check.json" 2>/dev/null && \
-        jq -e --arg version "$version" '.attributes.version == $version and (.attributes.controls.mode != null) and (.attributes.controls.target != null) and (.attributes | has("backup_active")) and (.attributes.rooms | all(.controls.override != null and .controls.target != null and .controls.override_duration != null and .configuration_url != null and .low_at_or_above != null and has("backup_active"))) and (.attributes.zones | all(.sensor_status != null and .configuration_url != null and has("water_source_id") and has("operating_water_temperature") and has("backup_active")))' "$backup/runtime-check.json" >/dev/null && \
+        jq -e --arg version "$version" '
+            .attributes.version == $version
+            and (.attributes.controls | .mode != null and .target != null
+                and .weighted_temperature != null and .home_target != null
+                and .native_target != null and .native_correction != null)
+            and (.attributes | has("backup_active") and .timezone != null)
+            and (.attributes.rooms | all(
+                .controls.override != null and .controls.target != null
+                and .controls.override_duration != null and .controls.room_maximum != null
+                and .controls.room_hysteresis != null and .controls.limits_override != null
+                and .controls.quiet_enabled != null and .controls.target_temperature != null
+                and .controls.fan_speed != null and .controls.fan_starts != null
+                and .controls.low_runtime != null and .controls.medium_runtime != null
+                and .fan_on_temperature != null and .fan_off_temperature != null
+                and has("limits_override") and has("quiet_enabled") and has("quiet_active")
+                and .configuration_url != null and .low_at_or_above != null and has("backup_active")))
+            and (.attributes.zones | all(.sensor_status != null and .configuration_url != null
+                and has("water_source_id") and has("operating_water_temperature") and has("backup_active")))
+        ' "$backup/runtime-check.json" >/dev/null && \
         curl -fsS --max-time 5 -H "Authorization: Bearer $access_token" "$api_url/api/services" 2>/dev/null | \
-        jq -e 'any(.[]; .domain == "central_heating" and .services.set_room_override != null)' >/dev/null; then
+        jq -e 'any(.[]; .domain == "central_heating" and .services.set_room_override != null and .services.set_room_quiet_hours != null)' >/dev/null; then
         ready=true
         break
     fi

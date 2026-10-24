@@ -218,6 +218,122 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
     def fan_calls(self):
         return [(service, data.get("fan_mode") or data.get("hvac_mode")) for _, service, data in self.hass.services.calls]
 
+    async def test_quiet_hours_use_ha_timezone_and_preserve_schedule_when_toggled(self):
+        self.hass.config.time_zone = "Europe/Warsaw"
+        instant = datetime(2026, 10, 19, 20, 0, tzinfo=UTC).timestamp()
+        with patch.object(controller_module, "time", lambda: instant):
+            await self.controller.async_set_quiet_hours("climate.office", True, "22:00", "07:00", [0])
+            room = self.controller.snapshot["rooms"][0]
+            self.assertEqual(self.controller.snapshot["timezone"], "Europe/Warsaw")
+            self.assertTrue(room["quiet_active"])
+            await self.controller.async_set_room("climate.office", "quiet_enabled", False)
+            self.assertFalse(self.controller.snapshot["rooms"][0]["quiet_active"])
+            await self.controller.async_set_room("climate.office", "quiet_enabled", True)
+            memory = self.controller.memories["climate.office"]
+            self.assertEqual((memory.quiet_start, memory.quiet_end, memory.quiet_days), ("22:00", "07:00", [0]))
+            self.assertTrue(self.controller.snapshot["rooms"][0]["quiet_active"])
+        restored = controller_module.HeatingController(self.hass, self.entry, self.zones)
+        await restored.async_load()
+        self.assertEqual(restored.memories["climate.office"].quiet_days, [0])
+        self.assertTrue(restored.memories["climate.office"].quiet_enabled)
+
+    async def test_quiet_is_per_room_and_boundary_restores_adaptive_speed(self):
+        self.hass.entity_registry.add("climate.bedroom", ["heating_upstairs"])
+        self.hass.states.room("climate.bedroom")
+        await self.prepare_adaptive_water()
+        self.hass.config.time_zone = "Europe/Warsaw"
+        instant = datetime(2026, 10, 19, 20, 0, tzinfo=UTC).timestamp()
+        with patch.object(controller_module, "time", lambda: instant):
+            await self.controller.async_set_quiet_hours("climate.office", True, "22:00", "07:00", [0])
+            self.assertEqual(self.hass.states.get("climate.office").attributes["fan_mode"], "low")
+            self.assertEqual(self.hass.states.get("climate.bedroom").attributes["fan_mode"], "medium")
+            self.clock += 11
+            instant = datetime(2026, 10, 20, 5, 0, tzinfo=UTC).timestamp()
+            await self.run_controller()
+            self.assertEqual(self.hass.states.get("climate.office").attributes["fan_mode"], "medium")
+            self.assertFalse(next(room for room in self.controller.snapshot["rooms"] if room["entity_id"] == "climate.office")["quiet_active"])
+
+    async def test_quiet_invalid_update_is_atomic(self):
+        await self.controller.async_set_quiet_hours("climate.office", True, "21:30", "06:30", [0, 4])
+        before = deepcopy(self.controller._serialize())
+        for entity, enabled, start, end, days in [
+            ("climate.missing", True, "22:00", "07:00", [0]),
+            ("climate.office", 1, "22:00", "07:00", [0]),
+            ("climate.office", True, "24:00", "07:00", [0]),
+            ("climate.office", True, "7:00", "07:00", [0]),
+            ("climate.office", True, "22:00", "22:00", [0]),
+            ("climate.office", True, "22:00", "07:00", []),
+            ("climate.office", True, "22:00", "07:00", [0, 0]),
+            ("climate.office", True, "22:00", "07:00", [True]),
+            ("climate.office", True, "22:00", "07:00", [7]),
+            ("climate.office", True, "22:00", "07:00", "0"),
+        ]:
+            with self.subTest(entity=entity, days=days, start=start):
+                with self.assertRaises(ServiceValidationError):
+                    await self.controller.async_set_quiet_hours(entity, enabled, start, end, days)
+                self.assertEqual(self.controller._serialize(), before)
+
+    async def test_legacy_and_invalid_quiet_storage_preserve_other_room_settings(self):
+        for quiet in ({}, {"quiet_enabled": True, "quiet_start": "invalid"}, {"quiet_enabled": True, "quiet_days": [False]}):
+            self.hass.storage["central_heating"] = {"rooms": {"climate.office": {
+                "target": 23, "override": True, "room_maximum": 25, **quiet,
+            }}, "seeded": True}
+            restored = controller_module.HeatingController(self.hass, self.entry, self.zones)
+            await restored.async_load()
+            memory = restored.memories["climate.office"]
+            self.assertFalse(memory.quiet_enabled)
+            self.assertEqual((memory.quiet_start, memory.quiet_end, memory.quiet_days), ("22:00", "07:00", list(range(7))))
+            self.assertEqual((memory.target, memory.override, memory.room_maximum), (23, True, 25))
+
+    async def test_quiet_change_during_speed_command_rechecks_before_power_on(self):
+        await self.prepare_adaptive_water()
+        self.clock += 11
+        self.hass.states.room("climate.office")
+        self.hass.services.calls.clear()
+        self.hass.config.time_zone = "Europe/Warsaw"
+        instant = datetime(2026, 10, 19, 20, 0, tzinfo=UTC).timestamp()
+        async def enable_quiet(service, data):
+            self.controller.memories["climate.office"].quiet_enabled = True
+        self.hass.services.hook = enable_quiet
+        with patch.object(controller_module, "time", lambda: instant):
+            await self.run_controller()
+        self.assertEqual(self.fan_calls(), [("set_fan_mode", "medium"), ("set_fan_mode", "low"), ("set_hvac_mode", "fan_only")])
+        self.assertEqual(self.controller.snapshot["rooms"][0]["reason"], "Quiet hours · low")
+
+    async def test_reported_stop_then_restart_counts_when_final_published_mode_is_unchanged(self):
+        self.controller.async_start()
+        await self.run_controller()
+        before = self.controller.snapshot["rooms"][0]["fan_starts"]
+        self.clock += 10
+        self.hass.states.room("climate.office", mode="off", speed="low")
+        self.hass.bus.fire("state_changed", {"entity_id": "climate.office", "new_state": self.hass.states.get("climate.office")})
+        # Reconciliation restarts this fan before it next publishes its snapshot.
+        await self.run_controller()
+        room = self.controller.snapshot["rooms"][0]
+        self.assertEqual(room["reported_mode"], "fan_only")
+        self.assertEqual(room["fan_starts"], before + 1)
+        # A managed sensor update is not mistaken for a fan transition.
+        self.hass.bus.fire("state_changed", {"entity_id": "sensor.heating_office_fan_starts", "new_state": SimpleNamespace(state="off")})
+        self.assertEqual(self.controller.telemetry.snapshot("climate.office")["fan_starts"], before + 1)
+        await self.controller.async_stop(turn_off=False)
+
+    async def test_unassigned_room_time_does_not_accrue_when_room_is_readded(self):
+        await self.run_controller()
+        self.clock += 60
+        await self.run_controller()
+        before = self.controller.telemetry.snapshot("climate.office")["low_runtime_hours"]
+        self.hass.entity_registry.entities["climate.office"].labels.clear()
+        await self.run_controller()
+        self.clock += 3600
+        # A fan used outside central heating cannot contribute that unmanaged hour.
+        self.hass.states.room("climate.office", mode="fan_only", speed="low")
+        self.hass.entity_registry.entities["climate.office"].labels.add("heating_upstairs")
+        await self.run_controller()
+        self.assertEqual(self.controller.snapshot["rooms"][0]["low_runtime_hours"], before)
+        self.clock += 60
+        await self.run_controller()
+        self.assertAlmostEqual(self.controller.snapshot["rooms"][0]["low_runtime_hours"], before + 1 / 60)
+
     async def test_speed_is_set_before_powering_on(self):
         await self.run_controller()
         self.assertEqual(self.fan_calls(), [("set_fan_mode", "low"), ("set_hvac_mode", "fan_only")])
@@ -310,6 +426,14 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(memory.override)
         self.assertEqual(memory.target, 23)
 
+        self.assertFalse(memory.limits_override)
+        self.assertIsNone(memory.room_maximum)
+        self.assertIsNone(memory.room_hysteresis)
+        await self.controller.async_set_setting("room_maximum", 26)
+        bedroom = next(room for room in self.controller.snapshot["rooms"] if room["entity_id"] == "climate.bedroom")
+        self.assertEqual((bedroom["fan_on_temperature"], bedroom["fan_off_temperature"]), (25.5, 26))
+        self.assertFalse(bedroom["limits_override"])
+
     async def test_saved_latches_survive_startup_and_deadbands(self):
         self.controller.settings.mode = "Adaptive"
         self.controller.memories["climate.office"] = logic.RoomMemory(blocked=True, override=True, target=23)
@@ -340,6 +464,167 @@ class ControllerTests(unittest.IsolatedAsyncioTestCase):
         await self.controller.async_set_room("climate.office", "override", False)
         self.assertEqual(self.controller.snapshot["rooms"][0]["effective_target"], 20)
         self.assertEqual(self.controller.memories["climate.office"].target, 23)
+
+    async def test_room_limits_capture_pair_and_reset_to_live_global_defaults(self):
+        key = "climate.office"
+        await self.controller.async_set_room(key, "room_maximum", 23)
+        memory = self.controller.memories[key]
+        self.assertTrue(memory.limits_override)
+        self.assertEqual((memory.room_maximum, memory.room_hysteresis), (23, 0.5))
+        await self.controller.async_set_setting("room_maximum", 26)
+        await self.controller.async_set_setting("room_hysteresis", 1)
+        room = self.controller.snapshot["rooms"][0]
+        self.assertEqual((room["room_maximum"], room["room_hysteresis"]), (23, 0.5))
+        self.assertEqual((room["fan_on_temperature"], room["fan_off_temperature"]), (22.5, 23))
+        await self.controller.async_set_room(key, "limits_override", False)
+        self.assertIsNone(memory.room_maximum)
+        self.assertIsNone(memory.room_hysteresis)
+        self.assertFalse(memory.limits_override)
+        room = self.controller.snapshot["rooms"][0]
+        self.assertEqual((room["fan_on_temperature"], room["fan_off_temperature"]), (25, 26))
+        await self.controller.async_set_setting("room_hysteresis", 2)
+        self.assertEqual(self.controller.snapshot["rooms"][0]["fan_on_temperature"], 24)
+        await self.controller.async_set_room(key, "limits_override", True)
+        self.assertEqual((memory.room_maximum, memory.room_hysteresis), (26, 2))
+        await self.controller.async_set_room(key, "room_hysteresis", 0.75)
+        self.assertEqual((memory.room_maximum, memory.room_hysteresis), (26, 0.75))
+
+    async def test_hysteresis_edit_also_captures_current_maximum(self):
+        await self.controller.async_set_setting("room_maximum", 25)
+        await self.controller.async_set_room("climate.office", "room_hysteresis", 1.5)
+        await self.controller.async_set_setting("room_maximum", 27)
+        memory = self.controller.memories["climate.office"]
+        self.assertEqual(memory.effective_room_limits(self.controller.settings), (25, 1.5))
+
+    async def test_room_limit_change_during_fan_command_prevents_start(self):
+        async def lower_limit(service, data):
+            self.controller.memories["climate.office"].room_maximum = 20
+        self.hass.services.hook = lower_limit
+        await self.run_controller()
+        self.assertEqual(self.fan_calls(), [("set_fan_mode", "low")])
+        self.assertEqual(self.hass.states.get("climate.office").state, "off")
+
+    async def test_room_limits_drive_each_device_at_its_own_boundaries(self):
+        self.hass.entity_registry.add("climate.bedroom", ["heating_upstairs"])
+        self.hass.states.room("climate.bedroom", temperature=22)
+        await self.run_controller()
+        await self.controller.async_set_room("climate.office", "room_maximum", 23)
+        await self.controller.async_set_room("climate.office", "room_hysteresis", 1)
+        for mode in ("Manual", "Adaptive"):
+            self.controller.settings.mode = mode
+            self.controller.gates["upstairs"] = True
+            for value, office_mode, bedroom_mode in [
+                (22, "fan_only", "fan_only"),
+                (23, "off", "fan_only"),
+                (22.5, "off", "fan_only"),
+                (22, "fan_only", "fan_only"),
+                (24, "off", "off"),
+                (23.6, "off", "off"),
+                (23.5, "off", "fan_only"),
+            ]:
+                with self.subTest(mode=mode, value=value):
+                    for key in ("climate.office", "climate.bedroom"):
+                        self.hass.states.get(key).attributes["current_temperature"] = value
+                    self.clock += 11
+                    await self.run_controller()
+                    self.assertEqual(self.hass.states.get("climate.office").state, office_mode)
+                    self.assertEqual(self.hass.states.get("climate.bedroom").state, bedroom_mode)
+
+    async def test_room_limits_persist_independently_of_target_expiry_and_cancel(self):
+        key = "climate.office"
+        await self.controller.async_set_room(key, "room_maximum", 25)
+        await self.controller.async_set_room(key, "room_hysteresis", 1)
+        await self.controller.async_apply_override(key, 23, "30 minutes")
+        self.clock += 1800
+        await self.run_controller()
+        memory = self.controller.memories[key]
+        self.assertFalse(memory.override)
+        self.assertEqual(memory.effective_room_limits(self.controller.settings), (25, 1))
+        await self.controller.async_apply_override(key, 23, "1 hour")
+        await self.controller.async_set_room(key, "override", False)
+        restored = controller_module.HeatingController(self.hass, self.entry, self.zones)
+        await restored.async_load()
+        memory = restored.memories[key]
+        self.assertTrue(memory.limits_override)
+        self.assertFalse(memory.override)
+        self.assertEqual(memory.effective_room_limits(restored.settings), (25, 1))
+        self.assertTrue(restored.snapshot["rooms"][0]["limits_override"])
+
+    async def test_resetting_room_limits_preserves_active_target_and_deadline(self):
+        key = "climate.office"
+        await self.controller.async_set_room(key, "room_maximum", 25)
+        await self.controller.async_apply_override(key, 23, "1 hour")
+        deadline = self.controller.memories[key].override_expires_at
+        await self.controller.async_set_room(key, "limits_override", False)
+        memory = self.controller.memories[key]
+        self.assertTrue(memory.override)
+        self.assertEqual(memory.target, 23)
+        self.assertEqual(memory.override_expires_at, deadline)
+
+    async def test_invalid_room_limits_are_rejected_without_mutation_or_commands(self):
+        key = "climate.office"
+        await self.controller.async_set_room(key, "room_maximum", 25)
+        before = deepcopy(self.controller._serialize())
+        snapshot = deepcopy(self.controller.snapshot)
+        storage = deepcopy(self.hass.storage)
+        calls = deepcopy(self.hass.services.calls)
+        invalid = [("room_maximum", value) for value in (None, True, False, "NaN", float("inf"), 4.9, 35.1)]
+        invalid += [("room_hysteresis", value) for value in (None, True, False, float("nan"), -1, 0, 0.09, 5.1)]
+        invalid += [("limits_override", value) for value in (None, 0, 1, "true")]
+        for field, value in invalid:
+            with self.subTest(field=field, value=value):
+                with self.assertRaises(ServiceValidationError):
+                    await self.controller.async_set_room(key, field, value)
+                self.assertEqual(self.controller._serialize(), before)
+                self.assertEqual(self.controller.snapshot, snapshot)
+                self.assertEqual(self.hass.storage, storage)
+                self.assertEqual(self.hass.services.calls, calls)
+        with self.assertRaises(ServiceValidationError):
+            await self.controller.async_set_room("climate.missing", "room_maximum", 25)
+        self.assertEqual(self.controller._serialize(), before)
+
+    async def test_room_limit_bounds_are_accepted(self):
+        for field, values in (("room_maximum", (5, 35)), ("room_hysteresis", (0.1, 5))):
+            for value in values:
+                await self.controller.async_set_room("climate.office", field, value)
+                self.assertEqual(getattr(self.controller.memories["climate.office"], field), value)
+
+    async def test_legacy_and_invalid_stored_room_limits_inherit_globals(self):
+        for extra in ({}, {"room_maximum": True, "room_hysteresis": False},
+                      {"room_maximum": "NaN", "room_hysteresis": float("inf")},
+                      {"room_maximum": 40, "room_hysteresis": 0}):
+            with self.subTest(extra=extra):
+                self.hass.storage["central_heating"] = {
+                    "settings": {"room_maximum": 26, "room_hysteresis": 1},
+                    "rooms": {"climate.office": {"override": True, "target": 23, **extra}},
+                    "seeded": True,
+                }
+                restored = controller_module.HeatingController(self.hass, self.entry, self.zones)
+                await restored.async_load()
+                memory = restored.memories["climate.office"]
+                self.assertEqual(memory.effective_room_limits(restored.settings), (26, 1))
+                self.assertFalse(memory.limits_override)
+                self.assertTrue(memory.override)
+                self.assertEqual(memory.target, 23)
+
+    async def test_partial_saved_limits_inherit_missing_value_until_override_is_enabled(self):
+        for stored, expected in [({"room_maximum": 25, "room_hysteresis": -1}, (25, 1)),
+                                 ({"room_hysteresis": 2}, (26, 2))]:
+            with self.subTest(stored=stored):
+                self.hass.storage["central_heating"] = {
+                    "settings": {"room_maximum": 26, "room_hysteresis": 1},
+                    "rooms": {"climate.office": stored}, "seeded": True,
+                }
+                restored = controller_module.HeatingController(self.hass, self.entry, self.zones)
+                await restored.async_load()
+                memory = restored.memories["climate.office"]
+                self.assertTrue(memory.limits_override)
+                self.assertEqual(memory.effective_room_limits(restored.settings), expected)
+                await restored.async_set_room("climate.office", "limits_override", True)
+                self.assertEqual((memory.room_maximum, memory.room_hysteresis), expected)
+                await restored.async_set_setting("room_maximum", 27)
+                await restored.async_set_setting("room_hysteresis", 3)
+                self.assertEqual(memory.effective_room_limits(restored.settings), expected)
 
     async def test_timed_override_expires_to_changed_central_default(self):
         await self.controller.async_apply_override("climate.office", 23, "30 minutes")

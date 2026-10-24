@@ -1,0 +1,7 @@
+# Keep live dashboard snapshots out of the database. Small chart sensors remain
+# recorded and the integration cleans their history on its own 12-hour policy.
+exclude:
+  entities:
+    - sensor.central_heating_status
+  entity_globs:
+    - sensor.central_heating_*_status

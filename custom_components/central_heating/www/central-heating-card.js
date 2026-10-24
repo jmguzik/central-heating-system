@@ -18,7 +18,24 @@ const polish = {
   "Advanced settings": "Ustawienia zaawansowane", "Language": "Język",
   "Water ON": "Woda: próg włączenia", "Water OFF": "Woda: próg wyłączenia",
   "Room maximum": "Limit temperatury pokoju", "Room restart gap": "Spadek do ponownego włączenia",
-  "Restart explanation": "Po osiągnięciu limitu wentylatory mogą ponownie ruszyć przy {temperature}. Bieg pozostaje bez zmian między temperaturą docelową −1,5°C a −0,5°C. Temperatura wody jest wygładzana medianą trzech odczytów i filtrem o stałej czasowej 60 sekund. Włączenie wymaga 30 sekund potwierdzenia; prawidłowy surowy odczyt na progu wyłączenia lub poniżej zatrzymuje wentylatory od razu. Niedostępny czujnik jest automatycznie zastępowany drugim sprawnym. Błędne odczyty mają 60 sekund okresu ochronnego; potem działa czujnik zapasowy lub strefa zostaje wyłączona.",
+  "Advanced room settings": "Zaawansowane ustawienia pokoju", "Use custom room limits": "Używaj własnych limitów pokoju",
+  "Fan OFF temperature": "Temperatura wyłączenia wentylatora", "Fan ON": "Włączenie wentylatora", "Fan OFF": "Wyłączenie wentylatora",
+  "Global limits": "Limity globalne", "Custom room limits": "Własne limity pokoju",
+  "Room limits help": "Wentylator wyłącza się po osiągnięciu limitu i może ponownie ruszyć po spadku temperatury o ustawioną wartość. Włącz własne limity, aby zmienić je tylko dla tego pokoju. Wyłącz je, aby wrócić do bieżących wartości globalnych.",
+  "Global limits help": "To wartości domyślne. Każdy pokój może mieć własny limit temperatury i spadek do ponownego włączenia.",
+  "Quiet hours": "Cisza nocna", "Enable quiet hours": "Włącz ciszę nocną", "Quiet hours · low": "Cisza nocna · niski bieg",
+  "Quiet hours active": "Cisza nocna aktywna · tylko niski bieg", "Start": "Początek", "End": "Koniec", "Save quiet hours": "Zapisz ciszę nocną",
+  "Quiet hours help": "W wybranych godzinach wentylator może pracować tylko na niskim biegu. Wyłączenie systemu, zimna woda i limit pokoju nadal mają pierwszeństwo. Wybrane dni oznaczają dzień rozpoczęcia. Strefa czasowa: {timezone}.",
+  "Quiet days required": "Wybierz przynajmniej jeden dzień i różne godziny początku oraz końca.",
+  "History maintenance": "Obsługa historii", "History": "Historia", "Performance history": "Historia ogrzewania", "History period": "Okres historii", "Room": "Pokój",
+  "Last 12 hours": "Ostatnie 12 godzin", "Whole home": "Cały dom", "Average room temperature": "Średnia temperatura pokoi", "Room temperatures": "Temperatury pokoi", "Home temperatures and targets": "Temperatura domu i nastawy",
+  "Native correction": "Korekta miGo", "Room temperature and target": "Temperatura i cel pokoju", "Reported fan speed": "Zgłoszony bieg wentylatora",
+  "Fan runtime counters": "Liczniki czasu pracy wentylatorów", "Fan start counter": "Licznik uruchomień wentylatorów",
+  "History help": "Wykresy pokazują ostatnie 12 godzin. Czas pracy i uruchomienia to narastające liczniki od początku pomiarów, a nie sumy za ten okres. Opierają się na stanach zgłaszanych przez termostaty. Cały dom pokazuje średnią temperaturę pokoi oraz łączną liczbę pracujących wentylatorów, czas pracy i uruchomienia.",
+  "History unavailable": "Wykresy są dostępne po załadowaniu kontrolek historii Home Assistant. Spróbuj ponownie.",
+  "History sensors missing": "Oczekiwanie na encje historii ogrzewania.", "Retry graphs": "Wczytaj wykresy ponownie",
+  "Measured room": "Temperatura pokoju", "Home target": "Cel domu", "Native target": "Nastawa miGo",
+  "Restart explanation": "Przy limitach globalnych wentylatory mogą ponownie ruszyć przy {temperature}. Bieg pozostaje bez zmian między temperaturą docelową −1,5°C a −0,5°C. Temperatura wody jest wygładzana medianą trzech odczytów i filtrem o stałej czasowej 60 sekund. Włączenie wymaga 30 sekund potwierdzenia; prawidłowy surowy odczyt na progu wyłączenia lub poniżej zatrzymuje wentylatory od razu. Niedostępny czujnik jest automatycznie zastępowany drugim sprawnym. Błędne odczyty mają 60 sekund okresu ochronnego; potem działa czujnik zapasowy lub strefa zostaje wyłączona.",
   "Backup water": "Woda z czujnika zapasowego", "Backup sensor active": "Sterowanie czujnikiem zapasowym",
   "Backup explanation": "{zone} korzysta z odczytów czujnika {source}. Własny czujnik jest niedostępny lub podaje błędne odczyty. Powrót nastąpi automatycznie po poprawnym odczycie.",
   "No usable water sensor": "Brak sprawnego czujnika wody",
@@ -66,7 +83,14 @@ const polish = {
   "Stored settings were invalid; reset to defaults and Off": "Zapisane ustawienia były błędne; przywrócono wartości domyślne i wyłączono system",
 };
 const english = {
-  "Restart explanation": "Rooms restart at {temperature} after reaching the maximum. Fan speed keeps its previous value between target −1.5°C and target −0.5°C. Water uses a median of three reports and smoothing with a 60-second time constant. Starting requires 30 seconds of confirmation; a valid raw reading at or below the OFF threshold stops fans immediately. An unavailable sensor is automatically replaced by the other healthy reader. Invalid readings retain the 60-second grace, then use backup or stop the zone.",
+  "Restart explanation": "With global limits, rooms can restart at {temperature} after reaching the maximum. Fan speed keeps its previous value between target −1.5°C and target −0.5°C. Water uses a median of three reports and smoothing with a 60-second time constant. Starting requires 30 seconds of confirmation; a valid raw reading at or below the OFF threshold stops fans immediately. An unavailable sensor is automatically replaced by the other healthy reader. Invalid readings retain the 60-second grace, then use backup or stop the zone.",
+  "Room limits help": "The fan stops at the maximum and can restart after the temperature falls by the restart gap. Enable custom limits to change this room. Turn them off to follow the current global values.",
+  "Global limits help": "These are defaults. Each room can use its own maximum temperature and restart gap.",
+  "Quiet hours help": "During these hours, an eligible fan uses low speed only. System Off, cold water and room limits still take priority. Selected days are the days the period starts. Time zone: {timezone}.",
+  "Quiet days required": "Choose at least one day and different start and end times.",
+  "History help": "Graphs show the last 12 hours. Runtime and starts are cumulative counters since tracking began, not totals for this period. They use states reported by thermostats. Whole home shows the average room temperature and combined running fans, runtime and starts.",
+  "History unavailable": "Graphs need Home Assistant's history card helpers to finish loading. Try again.",
+  "History sensors missing": "Waiting for heating history entities.",
   "Backup explanation": "{zone} uses readings from {source}. Its own sensor is unavailable or has invalid readings. The primary returns automatically after a valid reading.",
   "Add thermostat instruction": "Add the thermostat through", "Room appears instruction": "The room and its controls appear automatically and inherit the central target. The current system mode applies immediately.",
   "Choose the pipe instruction": "Choose the zone by the water pipe supplying the fan-coil, regardless of the thermostat's floor.",
@@ -118,6 +142,9 @@ class CentralHeatingCard extends HTMLElement {
   constructor() {
     super();
     this._drafts = new Map();
+    this._quietDrafts = new Map();
+    this._historyRoom = "";
+    this._historyCards = [];
     this._open = new Set();
     this._pending = false;
     this._tab = "home";
@@ -142,6 +169,7 @@ class CentralHeatingCard extends HTMLElement {
 
   set hass(hass) {
     this._hass = hass;
+    this._historyCards.forEach(card => { card.hass = hass; });
     const signature = JSON.stringify(hass.states[this._config?.entity]?.attributes);
     if (signature === this._signature) return;
     this._signature = signature;
@@ -191,11 +219,14 @@ class CentralHeatingCard extends HTMLElement {
     const speed = room.reported_mode === "off" ? "Off" : room.reported_mode === "fan_only" ? room.reported_fan || "Fan" : room.reported_mode;
     const draft = this._drafts.get(room.key) || {target: room.custom_target, duration: room.override ? room.override_duration : "2 hours"};
     const expiry = room.override_expires_at ? `<span data-expires="${room.override_expires_at}"></span>` : this._t("Until cancelled");
+    const quiet = this._quietDrafts.get(room.key) || {enabled: room.quiet_enabled || false, start: room.quiet_start || "22:00", end: room.quiet_end || "07:00", days: room.quiet_days || [0,1,2,3,4,5,6]};
+    const days = this._language === "pl" ? ["Pon","Wt","Śr","Czw","Pt","Sob","Nd"] : ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
     return `<article class="room ${fault ? "unconfirmed" : ""}" data-room="${esc(room.key)}">
       <div class="room-head"><h3>${esc(room.name)}</h3><span class="pill ${room.reported_mode === "fan_only" ? "running" : ""}">${esc(this._t(speed))}</span></div>
       <div class="room-temperature">${this._degrees(room.temperature)}</div>
       <div class="target-summary">${this._t("Target")} <strong>${this._degrees(room.effective_target)}</strong><span class="source">${esc(this._t(room.target_source))}</span></div>
       <p class="reason">${esc(this._t(room.reason))}${!room.confirmed ? ` · ${this._t("awaiting device confirmation")}` : ""}</p>
+      ${room.quiet_active ? `<p class="small" data-quiet-active>${this._t("Quiet hours active")}</p>` : ""}
       ${room.error ? `<p class="error" role="alert">${esc(this._t(room.error))}</p>` : ""}
       ${room.override ? `<div class="override-active"><span>${this._t(room.override_expires_at ? "Temporary override" : "Custom target")} · ${expiry}</span><button type="button" data-cancel="${esc(room.controls?.override || "")}" ${this._pending ? "disabled" : ""}>${this._t("Cancel")}</button></div>` : ""}
       <details data-panel="room-${esc(room.key)}" ${this._open.has(`room-${room.key}`) ? "open" : ""}>
@@ -207,6 +238,27 @@ class CentralHeatingCard extends HTMLElement {
         </div>
         <p class="small thresholds">${this._t("Medium")} ≤${this._degrees(room.medium_at_or_below)} · ${this._t("low")} ≥${this._degrees(room.low_at_or_above)}</p>
         <a class="device-settings" href="${esc(room.configuration_url || '/config/entities')}">${this._t("Thermostat settings ↗")}</a>
+      </details>
+      <details data-panel="room-limits-${esc(room.key)}" ${this._open.has(`room-limits-${room.key}`) ? "open" : ""}>
+        <summary>${this._t("Advanced room settings")} · ${this._t(room.limits_override ? "Custom room limits" : "Global limits")}</summary>
+        <label class="limits-toggle"><input type="checkbox" data-room-limits aria-label="${this._t("Use custom room limits")} · ${esc(room.name)}" ${room.limits_override ? "checked" : ""} ${this._pending || !room.controls?.limits_override ? "disabled" : ""}>${this._t("Use custom room limits")}</label>
+        <div class="override-form">
+          ${this._number("room_maximum", this._t("Fan OFF temperature"), room.room_maximum, 5, 35, 0.5, room.limits_override ? room.controls?.room_maximum : null)}
+          ${this._number("room_hysteresis", this._t("Room restart gap"), room.room_hysteresis, 0.1, 5, 0.1, room.limits_override ? room.controls?.room_hysteresis : null)}
+        </div>
+        <p class="small thresholds" data-fan-thresholds>${this._t("Fan ON")} ≤${this._degrees(room.fan_on_temperature)} · ${this._t("Fan OFF")} ≥${this._degrees(room.fan_off_temperature)}</p>
+        <p class="small">${this._t("Room limits help")}</p>
+        <div class="quiet-form" data-quiet-form>
+          <h3>${this._t("Quiet hours")}</h3>
+          <label class="limits-toggle"><input type="checkbox" data-quiet-enabled ${quiet.enabled ? "checked" : ""} ${this._pending ? "disabled" : ""}>${this._t("Enable quiet hours")}</label>
+          <div class="override-form">
+            <label class="setting">${this._t("Start")}<input type="time" data-quiet-start value="${esc(quiet.start)}" required ${this._pending ? "disabled" : ""}></label>
+            <label class="setting">${this._t("End")}<input type="time" data-quiet-end value="${esc(quiet.end)}" required ${this._pending ? "disabled" : ""}></label>
+          </div>
+          <div class="quiet-days">${days.map((day,index) => `<label><input type="checkbox" data-quiet-day value="${index}" ${quiet.days.includes(index) ? "checked" : ""} ${this._pending ? "disabled" : ""}>${day}</label>`).join("")}</div>
+          <p class="small">${esc(this._t("Quiet hours help", {timezone:this._hass.states[this._config.entity]?.attributes.timezone || this._hass.config?.time_zone || "UTC"}))}</p>
+          <button type="button" data-quiet-save ${this._pending ? "disabled" : ""}>${this._t("Save quiet hours")}</button>
+        </div>
       </details>
     </article>`;
   }
@@ -222,6 +274,13 @@ class CentralHeatingCard extends HTMLElement {
     const settings = model.settings;
     const controls = model.controls || {};
     const rooms = model.rooms || [];
+    if (!rooms.some(room => room.key === this._historyRoom)) this._historyRoom = "";
+    const historySignature = JSON.stringify([this._language, this._historyRoom, model.controls, rooms.map(room => [room.key,room.name,room.controls]), model.running_fans, model.startup_fault, model.history_error, this._pending, this._error]);
+    if (!force && this._tab === "history" && this._historySignature === historySignature && this.shadowRoot.querySelector("[data-history-mount]")) {
+      this._mountHistory(model);
+      return;
+    }
+    this._historySignature = historySignature;
     this.shadowRoot.innerHTML = `
       <style>
         :host{display:block;color:var(--primary-text-color);font-family:var(--ha-font-family,inherit)}
@@ -240,6 +299,8 @@ class CentralHeatingCard extends HTMLElement {
         .zones{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px;margin-top:22px}.zone{min-width:0}.zone-head{margin-bottom:12px;align-items:flex-start;flex-wrap:wrap}.water{margin-top:6px;font-size:15px}.zone-badge,.pill,.source{font-size:12px;border-radius:20px;padding:6px 10px;background:var(--secondary-background-color)}.ready,.running{color:var(--success-color,#2e7d32);background:color-mix(in srgb,var(--success-color,#2e7d32) 12%,transparent)}
         .room-list{display:grid;gap:12px}.room{border:1px solid var(--divider-color);border-radius:12px;padding:18px}.room-temperature{font-size:38px;font-weight:650;margin:8px 0}.target-summary{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:14px}.reason{margin-top:10px}.thresholds{margin-top:12px;font-size:12px}
         .override-active{margin-top:14px;border-radius:8px;background:var(--secondary-background-color);padding:9px;font-size:12px;flex-wrap:wrap}.override-active button{min-height:36px;padding:5px 10px}.override-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.override-form .primary{grid-column:1/-1}.setting{min-width:0}select{min-width:0}
+        .limits-toggle{display:flex;align-items:center;gap:10px;min-height:44px;margin:6px 0 12px;font-size:13px}.limits-toggle input{width:20px;height:20px;min-height:20px;padding:0;flex-shrink:0}
+        .quiet-form{border-top:1px solid var(--divider-color);padding-top:16px;margin-top:16px}.quiet-form input[type=time]{display:block;width:100%;margin-top:6px}.quiet-days{display:flex;gap:8px 12px;flex-wrap:wrap;margin:12px 0}.quiet-days label{display:flex;align-items:center;gap:5px;min-height:44px;font-size:13px}.quiet-days input{width:18px;height:18px;min-height:18px;padding:0}.quiet-form>button{margin-top:12px}.history-controls{display:flex;gap:16px;flex-wrap:wrap;margin:16px 0}.history-controls label{flex:1;min-width:150px}.history-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin:16px 0}.history-grid>*{min-width:0}.history-pane{margin-top:16px}@media(max-width:800px){.history-grid{grid-template-columns:1fr}}
         .diagnostics{background:var(--secondary-background-color);padding:10px 12px;border-radius:9px;margin-bottom:12px}.diagnostics p{font-size:12px;line-height:1.7}.alert{border-left:4px solid var(--error-color,#b3261e);padding:10px 12px;margin:12px 0;background:var(--secondary-background-color)}.error{color:var(--error-color,#b3261e);font-size:13px}.unconfirmed{border-color:var(--warning-color,#b26a00)}.backup-alert{border-color:var(--warning-color,#b26a00);font-size:14px;line-height:1.6;overflow-wrap:anywhere}.backup-alert p{margin-top:4px}
         .guide{padding:14px;background:var(--secondary-background-color);border-radius:10px;font-size:14px;line-height:1.7}.guide ol{padding-left:22px}.guide code{white-space:normal;overflow-wrap:anywhere}a{color:var(--primary-color)}.device-settings{display:inline-block;font-size:12px;color:var(--secondary-text-color);margin-top:10px;padding:6px 0}.empty{padding:18px;font-size:13px;border:1px dashed var(--divider-color);border-radius:9px}.footer{margin-top:20px;font-size:12px;color:var(--secondary-text-color)}
         @media(max-width:800px){.zones{grid-template-columns:1fr}.hero{align-items:flex-start}.hero-actions{justify-content:flex-end}ha-card{padding:20px}}
@@ -251,6 +312,7 @@ class CentralHeatingCard extends HTMLElement {
         ${this._error ? `<p class="error alert" role="alert">${esc(this._error)}</p>` : ""}
         ${model.startup_fault ? `<p class="error alert" role="alert">${esc(this._t(model.startup_fault))}</p>` : ""}
         ${this._comfort(model)}
+        ${this._history(model)}
         <div data-home-content ${this._tab !== "home" ? "hidden" : ""}>
         ${model.mode === "Adaptive" ? model.zones.filter(zone => zone.backup_active).map(zone => `<div class="alert backup-alert" role="alert" data-backup-zone="${esc(zone.id)}"><strong>${this._t("Backup sensor active")}</strong><p>${esc(this._t("Backup explanation", {zone:zone.name, source:zone.backup_source_name}))}</p></div>`).join("") : ""}
         <p class="small">${this._t("Fan-only mode")}</p><div class="main-controls"><div class="modes" role="group" aria-label="${this._t("Heating mode")}">${["Off", "Manual", "Adaptive"].map(mode => `<button type="button" data-mode="${mode}" class="${model.mode === mode ? "active" : ""}" aria-pressed="${model.mode === mode}" ${this._pending ? "disabled" : ""}>${this._t(mode)}</button>`).join("")}</div>${model.comfort?.settings?.migo_entity || model.comfort?.schedule_version ? "" : this._number("target", this._t("Central target"), settings.target, 5, 35, 0.5, controls.target)}</div>
@@ -260,7 +322,8 @@ class CentralHeatingCard extends HTMLElement {
           ${this._number("water_on", this._t("Water ON"), settings.water_on, 0, 100, 0.5, controls.water_on)}
           ${this._number("water_off", this._t("Water OFF"), settings.water_off, 0, 100, 0.5, controls.water_off)}
           ${this._number("room_maximum", this._t("Room maximum"), settings.room_maximum, 5, 35, 0.5, controls.room_maximum)}
-          ${this._number("room_hysteresis", this._t("Room restart gap"), settings.room_hysteresis, 0.5, 5, 0.5, controls.room_hysteresis)}
+          ${this._number("room_hysteresis", this._t("Room restart gap"), settings.room_hysteresis, 0.1, 5, 0.1, controls.room_hysteresis)}
+          <p class="small">${this._t("Global limits help")}</p>
           <p class="small">${this._t("Restart explanation", {temperature:this._degrees(settings.room_maximum - settings.room_hysteresis)})}</p>
         </div></details>
         <details data-panel="add-room" ${this._open.has("add-room") ? "open" : ""}><summary>${this._t("Add a thermostat to heating")}</summary><div class="guide"><ol>
@@ -281,10 +344,13 @@ class CentralHeatingCard extends HTMLElement {
       </ha-card>`;
     this._bind(model);
     this._clock();
+    this._mountHistory(model);
   }
 
   _bind(model) {
     this._bindComfort(model);
+    this.shadowRoot.querySelector("[data-history-room]").onchange = event => { this._historyRoom = event.target.value; this._render(true); };
+    this.shadowRoot.querySelector("[data-history-retry]").onclick = () => this._mountHistory(this._hass.states[this._config.entity].attributes);
     this.shadowRoot.querySelector("[data-language]").onchange = event => {
       this._language = event.target.value;
       try { localStorage.setItem(`central-heating-language:${this._config.entity}`, this._language); } catch (_) { /* Keep the selection for this session. */ }
@@ -320,6 +386,21 @@ class CentralHeatingCard extends HTMLElement {
     });
     this.shadowRoot.querySelectorAll("[data-room]").forEach(article => {
       const room = model.rooms.find(room => room.key === article.dataset.room);
+      const quietForm = article.querySelector("[data-quiet-form]");
+      const quietDraft = () => ({enabled: quietForm.querySelector("[data-quiet-enabled]").checked, start: quietForm.querySelector("[data-quiet-start]").value, end: quietForm.querySelector("[data-quiet-end]").value, days: [...quietForm.querySelectorAll("[data-quiet-day]:checked")].map(day => Number(day.value))});
+      quietForm.querySelectorAll("input").forEach(input => {
+        input.oninput = input.onchange = () => this._quietDrafts.set(room.key, quietDraft());
+        input.onblur = () => setTimeout(() => this._render(), 0);
+      });
+      quietForm.querySelector("[data-quiet-save]").onclick = async () => {
+        if (![...quietForm.querySelectorAll("input[type=time]")].every(input => input.reportValidity())) return;
+        const values = quietDraft();
+        this._quietDrafts.set(room.key, values);
+        if (!values.days.length || values.start === values.end) { this._error = this._t("Quiet days required"); this._render(true); return; }
+        if (await this._call("central_heating", "set_room_quiet_hours", {entity_id:room.entity_id,...values})) { this._quietDrafts.delete(room.key); this._render(true); }
+      };
+      const limits = article.querySelector("[data-room-limits]");
+      limits.onchange = () => this._call("switch", limits.checked ? "turn_on" : "turn_off", {entity_id: room.controls.limits_override});
       const select = article.querySelector("[data-duration]");
       select.onchange = () => { this._draft(article).duration = select.value; };
       select.onblur = () => setTimeout(() => this._render(), 0);
@@ -332,6 +413,78 @@ class CentralHeatingCard extends HTMLElement {
       const cancel = article.querySelector("[data-cancel]");
       if (cancel) cancel.onclick = () => this._call("switch", "turn_off", {entity_id: cancel.dataset.cancel});
     });
+  }
+
+  _history(model) {
+    return `<section class="history-pane" data-history-content ${this._tab !== "history" ? "hidden" : ""}>
+      <h2>${this._t("Performance history")}</h2><p class="small">${this._t("History help")}</p>
+      ${model.history_error ? `<p class="error" role="alert" data-history-error>${this._t("History maintenance")}: ${esc(model.history_error)}</p>` : ""}
+      <div class="history-controls">
+        <label class="setting">${this._t("Room")}<select data-history-room><option value="" ${this._historyRoom === "" ? "selected" : ""}>${this._t("Whole home")}</option>${(model.rooms || []).map(room => `<option value="${esc(room.key)}" ${room.key === this._historyRoom ? "selected" : ""}>${esc(room.name)}</option>`).join("")}</select></label>
+        <p class="small" data-history-range>${this._t("Last 12 hours")}</p>
+      </div><p class="small" role="status" data-history-message></p><div class="history-grid" data-history-mount></div>
+      <button type="button" data-history-retry hidden>${this._t("Retry graphs")}</button>
+    </section>`;
+  }
+
+  _historyConfigs(model) {
+    const controls = model.controls || {};
+    const room = (model.rooms || []).find(room => room.key === this._historyRoom);
+    const sensors = room?.controls || controls;
+    const entities = rows => rows.filter(([entity]) => entity).map(([entity,name]) => ({entity, name:this._t(name)}));
+    const history = (title, rows) => ({type:"history-graph", title:this._t(title), hours_to_show:12, entities:entities(rows)});
+    return [
+      history("Home temperatures and targets", [[controls.weighted_temperature,"Weighted average"],[controls.average_temperature,"Average room temperature"],[controls.home_target,"Home target"],[controls.native_target,"Native target"]]),
+      history("Native correction", [[controls.native_correction,"Native correction"]]),
+      room
+        ? history("Room temperature and target", [[sensors.temperature,"Measured room"],[sensors.target_temperature,"Room target"]])
+        : history("Room temperatures", (model.rooms || []).map(item => [item.controls?.temperature,item.name])),
+      room
+        ? history("Reported fan speed", [[sensors.fan_speed,"Reported fan speed"]])
+        : history("Fans running", [[controls.running_fans,"Fans running"]]),
+      history("Fan runtime counters", [[sensors.low_runtime,"low"],[sensors.medium_runtime,"medium"]]),
+      history("Fan start counter", [[sensors.fan_starts,"Fan start counter"]]),
+    ].filter(config => config.entities.length);
+  }
+
+  async _mountHistory(model) {
+    if (this._tab !== "history") return;
+    const mount = this.shadowRoot.querySelector("[data-history-mount]");
+    if (!mount) return;
+    const message = this.shadowRoot.querySelector("[data-history-message]");
+    const retry = this.shadowRoot.querySelector("[data-history-retry]");
+    const configs = this._historyConfigs(model);
+    const signature = JSON.stringify(configs);
+    if (!configs.length) {
+      this._historyRequest = (this._historyRequest || 0) + 1;
+      mount.replaceChildren();
+      message.textContent = this._t("History sensors missing");
+      retry.hidden = true;
+      return;
+    }
+    if (this._historyCardsSignature === signature && this._historyCards.length) {
+      this._historyCards.forEach(card => { card.hass = this._hass; });
+      if (mount.firstChild !== this._historyCards[0]) mount.replaceChildren(...this._historyCards);
+      message.textContent = "";
+      retry.hidden = true;
+      return;
+    }
+    const request = this._historyRequest = (this._historyRequest || 0) + 1;
+    try {
+      if (!window.loadCardHelpers) throw new Error("History helpers unavailable");
+      const helpers = this._cardHelpers || await window.loadCardHelpers();
+      if (this._tab !== "history" || request !== this._historyRequest || mount !== this.shadowRoot.querySelector("[data-history-mount]")) return;
+      this._cardHelpers = helpers;
+      this._historyCards = configs.map(config => { const card = helpers.createCardElement(config); card.hass = this._hass; return card; });
+      this._historyCardsSignature = signature;
+      mount.replaceChildren(...this._historyCards);
+      message.textContent = "";
+      retry.hidden = true;
+    } catch (_) {
+      if (request !== this._historyRequest || mount !== this.shadowRoot.querySelector("[data-history-mount]")) return;
+      message.textContent = this._t("History unavailable");
+      retry.hidden = false;
+    }
   }
 
   _comfort(model) {
@@ -349,7 +502,7 @@ class CentralHeatingCard extends HTMLElement {
     const home = homes.find(home=>home.id===settings.home_id);
     const nativeSelect = (key,label,rows) => `<label class="setting">${this._t(label)}<select data-comfort-field="${key}"><option value="">—</option>${(rows || []).map(row=>`<option value="${esc(row.id)}" ${row.id===settings[key] ? "selected" : ""}>${esc(row.name)}</option>`).join("")}</select></label>`;
     const input = (key,label,value,min,max,step=1) => `<label class="setting">${this._t(label)}<input data-comfort-field="${key}" type="number" value="${esc(settings[key] ?? value)}" min="${min}" max="${max}" step="${step}" required></label>`;
-    return `<nav class="tabs" aria-label="${this._t("Central heating")}">${["home","schedule","settings"].map(tab => `<button type="button" data-tab="${tab}" class="${this._tab === tab ? "active" : ""}" aria-pressed="${this._tab === tab}">${this._t(tab[0].toUpperCase()+tab.slice(1))}</button>`).join("")}</nav>
+    return `<nav class="tabs" aria-label="${this._t("Central heating")}">${["home","schedule","history","settings"].map(tab => `<button type="button" data-tab="${tab}" class="${this._tab === tab ? "active" : ""}" aria-pressed="${this._tab === tab}">${this._t(tab[0].toUpperCase()+tab.slice(1))}</button>`).join("")}</nav>
       <section class="comfort-home" ${this._tab !== "home" ? "hidden" : ""}>
         <h2>${this._t("Whole-home temperature")}</h2><p class="small">${this._t("Weighted average")}</p><div class="comfort-metric" data-weighted>${this._degrees(c.weighted_temperature)}</div>
         <div class="comfort-meta"><span>${this._t("Target")} <strong>${this._degrees(c.effective_target ?? model.settings.target)}</strong></span><span>${this._t("Source")}: ${this._t(c.target_source || "Central")}</span><span>${this._t("Ownership")}: <strong>${esc(this._t(c.owner || "miGo"))}</strong></span></div>

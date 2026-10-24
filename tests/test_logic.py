@@ -1,5 +1,7 @@
 """Boundary and sequence tests for the heating policy."""
 
+from datetime import datetime
+from zoneinfo import ZoneInfo
 import importlib.util
 from pathlib import Path
 import sys
@@ -18,8 +20,57 @@ class HeatingPolicyTests(unittest.TestCase):
         self.memory = logic.RoomMemory(blocked=False)
 
     def decision(self, room=20, allowed=True, **kwargs):
-        self.memory.blocked = logic.room_blocked(room, self.memory.blocked, self.settings)
+        self.memory.blocked = logic.room_blocked(room, self.memory.blocked, self.settings, self.memory)
         return logic.decide(self.settings, self.memory, room, allowed, **kwargs)
+
+    def test_quiet_schedule_boundaries_and_start_days(self):
+        self.memory.quiet_enabled = True
+        self.memory.quiet_days = [0]
+        zone = ZoneInfo("Europe/Warsaw")
+        for timestamp, active in [
+            ("2026-10-19T21:59", False), ("2026-10-19T22:00", True),
+            ("2026-10-20T00:00", True), ("2026-10-20T06:59", True),
+            ("2026-10-20T07:00", False), ("2026-10-20T22:00", False),
+            ("2026-10-19T06:00", False),
+        ]:
+            with self.subTest(timestamp=timestamp):
+                self.assertEqual(self.memory.quiet_active(datetime.fromisoformat(timestamp).replace(tzinfo=zone)), active)
+        self.memory.quiet_days = [6]
+        self.assertTrue(self.memory.quiet_active(datetime(2026, 10, 19, 6, tzinfo=zone)))
+        self.memory.quiet_days = [0]
+        self.memory.quiet_start, self.memory.quiet_end = "09:00", "17:00"
+        for hour, active in [(8, False), (9, True), (16, True), (17, False)]:
+            self.assertEqual(self.memory.quiet_active(datetime(2026, 10, 19, hour, tzinfo=zone)), active)
+
+    def test_quiet_schedule_dst_uses_local_wall_clock(self):
+        self.memory.quiet_enabled = True
+        self.memory.quiet_days = [5]
+        zone = ZoneInfo("Europe/Warsaw")
+        # Both occurrences of the repeated autumn hour belong to Saturday night.
+        for fold in (0, 1):
+            self.assertTrue(self.memory.quiet_active(datetime(2026, 10, 25, 2, 30, fold=fold, tzinfo=zone)))
+        self.assertTrue(self.memory.quiet_active(datetime(2026, 3, 29, 3, 0, tzinfo=zone)))
+        self.assertFalse(self.memory.quiet_active(datetime(2026, 3, 29, 7, 0, tzinfo=zone)))
+
+    def test_quiet_caps_speed_without_corrupting_adaptive_memory(self):
+        quiet = self.decision(20, quiet_active=True)
+        self.assertEqual((quiet.fan_mode, quiet.reason), ("low", "Quiet hours · low"))
+        self.assertEqual(self.memory.adaptive_fan, "medium")
+        self.assertEqual(self.decision(21, quiet_active=False).fan_mode, "medium")
+        self.decision(22, quiet_active=True)
+        self.assertEqual(self.memory.adaptive_fan, "low")
+        self.assertEqual(self.decision(21, quiet_active=False).fan_mode, "low")
+
+    def test_quiet_never_bypasses_stop_conditions(self):
+        for kwargs in ({"water_valid": False}, {"available": False}, {"membership_valid": False}, {"compatible": False}):
+            self.assertEqual(self.decision(20, quiet_active=True, **kwargs).hvac_mode, "off")
+        self.assertEqual(self.decision(20, allowed=False, quiet_active=True).hvac_mode, "off")
+        self.assertEqual(self.decision(None, quiet_active=True).hvac_mode, "off")
+        self.assertEqual(self.decision(24, quiet_active=True).hvac_mode, "off")
+        self.settings.mode = "Off"
+        self.assertEqual(self.decision(20, quiet_active=True).hvac_mode, "off")
+        self.settings.mode = "Manual"
+        self.assertEqual(self.decision(20, quiet_active=True).reason, "Manual · low")
 
     def test_water_heats_and_cools_through_deadband(self):
         allowed = False
@@ -61,6 +112,45 @@ class HeatingPolicyTests(unittest.TestCase):
     def test_half_degree_readings_keep_speed_in_the_deadband(self):
         for room, expected in [(21, "low"), (20.5, "medium"), (21, "medium"), (20.5, "medium"), (21.5, "low"), (21, "low")]:
             self.assertEqual(self.decision(room).fan_mode, expected, room)
+
+    def test_room_specific_limits_have_independent_cutoff_and_restart_latches(self):
+        for mode in ("Manual", "Adaptive"):
+            with self.subTest(mode=mode):
+                settings = logic.Settings(mode=mode)
+                rooms = [
+                    logic.RoomMemory(blocked=False, room_maximum=23, room_hysteresis=1),
+                    logic.RoomMemory(blocked=False, room_maximum=25, room_hysteresis=0.5),
+                ]
+                for value, expected in [(22, (False, False)), (23, (True, False)),
+                                        (22.5, (True, False)), (22, (False, False)),
+                                        (25, (True, True)), (24.6, (True, True)),
+                                        (24.5, (True, False))]:
+                    for memory, blocked in zip(rooms, expected):
+                        memory.blocked = logic.room_blocked(value, memory.blocked, settings, memory)
+                        self.assertEqual(memory.blocked, blocked, (mode, value))
+                        decision = logic.decide(settings, memory, value, True)
+                        self.assertEqual(decision.hvac_mode, "off" if blocked else "fan_only")
+
+    def test_room_limits_inherit_globals_and_valid_overrides_survive_roundtrip(self):
+        memory = logic.RoomMemory()
+        self.assertFalse(memory.limits_override)
+        self.assertEqual(memory.effective_room_limits(self.settings), (24, 0.5))
+        self.settings.room_maximum = 26
+        self.settings.room_hysteresis = 1
+        self.assertEqual(memory.effective_room_limits(self.settings), (26, 1))
+        memory.room_maximum = 23
+        memory.room_hysteresis = 0.75
+        restored = logic.RoomMemory(**memory.serialize())
+        self.assertTrue(restored.limits_override)
+        self.assertEqual(restored.effective_room_limits(self.settings), (23, 0.75))
+        self.assertFalse(logic.room_blocked(24.5, False, self.settings))
+        self.assertTrue(logic.room_blocked(24.5, False, self.settings, restored))
+
+    def test_invalid_memory_limits_use_globals(self):
+        for maximum, hysteresis in [(float("nan"), float("inf")), (True, False), (4, 6)]:
+            with self.subTest(maximum=maximum, hysteresis=hysteresis):
+                memory = logic.RoomMemory(room_maximum=maximum, room_hysteresis=hysteresis)
+                self.assertEqual(memory.effective_room_limits(self.settings), (24, 0.5))
 
     def test_override_changes_only_its_room(self):
         self.memory.target = 23

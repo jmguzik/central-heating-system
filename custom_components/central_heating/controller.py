@@ -2,9 +2,10 @@
 
 import asyncio
 from dataclasses import dataclass, replace
-from datetime import timedelta
+from datetime import datetime, timedelta
 import logging
 from time import monotonic, time
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from homeassistant.components import persistent_notification
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, EVENT_HOMEASSISTANT_STOP, EVENT_STATE_CHANGED, EVENT_STATE_REPORTED
@@ -17,6 +18,7 @@ from homeassistant.helpers.storage import Store
 from .const import DOMAIN, OVERRIDE_DURATIONS, RECONCILE_SECONDS, VERSION
 from .logic import Decision, RoomMemory, Settings, decide, room_blocked, temperature
 from .migo import MigoBridge
+from .telemetry import FanTelemetry
 from .water import CONFIRM_SECONDS, FAULT_SECONDS, UNAVAILABLE, WaterFilter, select_water_sources
 
 _LOGGER = logging.getLogger(__name__)
@@ -38,6 +40,7 @@ class HeatingController:
         self.zones = {zone["id"]: zone for zone in zones}
         self.settings = Settings()
         self.comfort = MigoBridge(self)
+        self.telemetry = FanTelemetry()
         self.rooms = {}
         self.memories = {}
         self.gates = {key: False for key in self.zones}
@@ -51,6 +54,7 @@ class HeatingController:
         self.snapshot = {}
         self.errors = {}
         self.startup_fault = None
+        self.history_error = None
         self._seeded = False
         self._store = Store(hass, 1, DOMAIN, atomic_writes=True)
         self._saved = None
@@ -74,6 +78,8 @@ class HeatingController:
             self.startup_fault = "Stored settings were invalid; reset to defaults and Off"
         for key, raw in data.get("rooms", {}).items():
             value = temperature(raw.get("target"))
+            maximum = temperature(raw.get("room_maximum"))
+            gap = temperature(raw.get("room_hysteresis"))
             self.memories[key] = RoomMemory(
                 blocked=raw.get("blocked") is not False,
                 override=raw.get("override") is True,
@@ -81,12 +87,23 @@ class HeatingController:
                 adaptive_fan="medium" if raw.get("adaptive_fan") == "medium" else "low",
                 override_duration=raw.get("override_duration") if raw.get("override_duration") in OVERRIDE_DURATIONS else "Until cancelled",
                 override_expires_at=temperature(raw.get("override_expires_at")),
+                room_maximum=maximum if maximum is not None and 5 <= maximum <= 35 else None,
+                room_hysteresis=gap if gap is not None and 0.1 <= gap <= 5 else None,
             )
-            self.memories[key].expire_override(time())
+            memory = self.memories[key]
+            quiet = (raw.get("quiet_enabled", False), raw.get("quiet_start", "22:00"), raw.get("quiet_end", "07:00"), raw.get("quiet_days", list(range(7))))
+            try:
+                RoomMemory.validate_quiet(*quiet)
+            except ValueError:
+                pass  # Disable only quiet hours; retain valid targets and fan limits.
+            else:
+                memory.quiet_enabled, memory.quiet_start, memory.quiet_end, memory.quiet_days = quiet
+            memory.expire_override(time())
         for key in self.gates:
             self.gates[key] = data.get("gates", {}).get(key) is True
         self._seeded = data.get("seeded") is True
         self.comfort.load(data.get("comfort", {}))
+        self.telemetry.load(data.get("telemetry", {}))
         if not data.get("comfort"):
             self.comfort.schedule = [{"day": 0, "time": "00:00", "target": min(30, max(7, self.settings.target))}]
         registry = er.async_get(self.hass)
@@ -120,9 +137,11 @@ class HeatingController:
             for key, zone in self.zones.items():
                 if zone["sensor"] == entity_id:
                     self._observe_water(key, event.data.get("new_state"), event.data.get("last_reported"))
-            if entity_id in self.comfort.watched_entities or entity_id in water_entities or any(
-                room.entity_id == entity_id for room in self.rooms.values()
-            ):
+            managed_room = next((room for room in self.rooms.values() if room.entity_id == entity_id), None)
+            if managed_room is not None:
+                # Observe each reported transition before reconciliation can reverse it.
+                self.telemetry.observe(managed_room.key, event.data.get("new_state"), monotonic())
+            if entity_id in self.comfort.watched_entities or entity_id in water_entities or managed_room is not None:
                 self.async_request_reconcile()
 
         water_entities = {zone["sensor"] for zone in self.zones.values()}
@@ -216,12 +235,27 @@ class HeatingController:
             value = temperature(value)
             if value is None or not 5 <= value <= 35:
                 raise ServiceValidationError("Custom target must be between 5 and 35 °C")
+        elif key in ("room_maximum", "room_hysteresis"):
+            lower, upper = (5, 35) if key == "room_maximum" else (0.1, 5)
+            value = temperature(value)
+            if value is None or not lower <= value <= upper:
+                raise ServiceValidationError(f"{key} must be between {lower} and {upper} °C")
         elif key == "override_duration":
             if value not in OVERRIDE_DURATIONS:
                 raise ServiceValidationError("Invalid override duration")
-        elif key != "override" or not isinstance(value, bool):
+        elif key not in ("override", "limits_override", "quiet_enabled") or not isinstance(value, bool):
             raise ServiceValidationError("Invalid room setting")
         memory = self.memories[room_key]
+        if key in ("room_maximum", "room_hysteresis", "limits_override"):
+            if key == "limits_override" and not value:
+                memory.room_maximum = memory.room_hysteresis = None
+            else:
+                memory.room_maximum, memory.room_hysteresis = memory.effective_room_limits(self.settings)
+                if key != "limits_override":
+                    setattr(memory, key, value)
+            await self._store.async_save(self._serialize())
+            await self.async_reconcile_now()
+            return
         was_active = memory.override
         setattr(memory, key, value)
         if key == "override" and not value:
@@ -231,6 +265,32 @@ class HeatingController:
             memory.override_expires_at = time() + seconds if seconds else None
         await self._store.async_save(self._serialize())
         await self.async_reconcile_now()
+
+    async def async_set_quiet_hours(self, entity_id, enabled, start, end, days):
+        """Save a complete, validated per-room schedule atomically."""
+        room = next((room for room in self.rooms.values() if room.entity_id == entity_id), None)
+        if room is None:
+            raise ServiceValidationError("Choose a thermostat managed by central heating")
+        try:
+            RoomMemory.validate_quiet(enabled, start, end, days)
+        except ValueError as err:
+            raise ServiceValidationError(str(err)) from err
+        memory = self.memories[room.key]
+        memory.quiet_enabled = enabled
+        memory.quiet_start, memory.quiet_end = start, end
+        memory.quiet_days = list(days)
+        await self._store.async_save(self._serialize())
+        await self.async_reconcile_now()
+
+    def _timezone(self):
+        name = getattr(self.hass.config, "time_zone", "UTC")
+        try:
+            return ZoneInfo(name)
+        except (ZoneInfoNotFoundError, TypeError, ValueError):
+            return ZoneInfo("UTC")
+
+    def _quiet_active(self, memory):
+        return memory.quiet_active(datetime.fromtimestamp(time(), self._timezone()))
 
     async def async_apply_override(self, entity_id, target, duration):
         """Apply target and deadline together, without intermediate fan decisions."""
@@ -323,6 +383,8 @@ class HeatingController:
             self.memories.setdefault(entity.id, RoomMemory(target=self.settings.target))
         for key in self.rooms.keys() - rooms.keys():
             await self._turn_off(self.rooms[key].entity_id)
+            # Clear after the stop command, whose state event may set a baseline.
+            self.telemetry.observe(key, None, monotonic())
         added = rooms.keys() - self.rooms.keys()
         self.rooms = rooms
         for listener in tuple(self._room_listeners):
@@ -366,13 +428,14 @@ class HeatingController:
         memory = self.memories[room.key]
         memory.expire_override(time())
         if self._started:
-            memory.blocked = room_blocked(current, memory.blocked, self.settings)
+            memory.blocked = room_blocked(current, memory.blocked, self.settings, memory)
         attributes = state.attributes if state else {}
         source = self._water_source(room.zone_ids[0])
         water = self.water_filters.get(source)
         allowed = self.gates[source] if source is not None else False
         decision = decide(
             self.settings, memory, current, allowed,
+            quiet_active=self._quiet_active(memory),
             water_valid=water is not None and water.usable(monotonic()),
             membership_valid=len(room.zone_ids) == 1,
             available=state is not None and state.state not in ("unavailable", "unknown"),
@@ -427,7 +490,7 @@ class HeatingController:
             _LOGGER.warning("Could not control heating fan %s: %s", room.entity_id, err)
 
     def _serialize(self):
-        return {"settings": self.settings.serialize(), "gates": dict(self.gates), "rooms": {key: memory.serialize() for key, memory in self.memories.items()}, "seeded": self._seeded, "comfort": self.comfort.serialize()}
+        return {"settings": self.settings.serialize(), "gates": dict(self.gates), "rooms": {key: memory.serialize() for key, memory in self.memories.items()}, "seeded": self._seeded, "comfort": self.comfort.serialize(), "telemetry": self.telemetry.serialize()}
 
     @callback
     def _publish(self):
@@ -435,8 +498,10 @@ class HeatingController:
         for room in sorted(self.rooms.values(), key=lambda item: item.name):
             state = self.hass.states.get(room.entity_id)
             decision = self._decision(room)
+            self.telemetry.observe(room.key, state, monotonic())
             memory = self.memories[room.key]
             target = memory.effective_target(self.settings)
+            maximum, gap = memory.effective_room_limits(self.settings)
             actual_mode = state.state if state else "unavailable"
             actual_fan = state.attributes.get("fan_mode") if state else None
             confirmed = actual_mode == decision.hvac_mode and (decision.hvac_mode == "off" or actual_fan == decision.fan_mode)
@@ -448,6 +513,13 @@ class HeatingController:
                 "backup_active": self._water_source(room.zone_ids[0]) not in (None, room.zone_ids[0]),
                 "effective_target": target, "target_source": ("Temporary" if memory.override_expires_at else "Custom") if memory.override else "Central",
                 "custom_target": memory.target, "override": memory.override,
+                "room_maximum": maximum, "room_hysteresis": gap,
+                "fan_on_temperature": maximum - gap, "fan_off_temperature": maximum,
+                "limits_override": memory.limits_override,
+                "quiet_enabled": memory.quiet_enabled, "quiet_start": memory.quiet_start,
+                "quiet_end": memory.quiet_end, "quiet_days": list(memory.quiet_days),
+                "quiet_active": self._quiet_active(memory),
+                **self.telemetry.snapshot(room.key),
                 "override_duration": memory.override_duration, "override_expires_at": memory.override_expires_at,
                 "medium_at_or_below": target - 1.5, "low_at_or_above": target - 0.5,
                 "blocked": memory.blocked, "desired_mode": decision.hvac_mode, "desired_fan": decision.fan_mode,
@@ -485,7 +557,9 @@ class HeatingController:
                 "label_missing": labels.async_get_label(zone["label"]) is None,
             })
         self.snapshot = {
+            "timezone": str(self._timezone()),
             "version": VERSION, "mode": self.settings.mode, "settings": self.settings.serialize(),
+            "history_hours": 12, "history_error": self.history_error,
             "controls": dict(self.controls), "startup_fault": self.startup_fault,
             "zones": zone_data,
             "backup_active": any(zone["backup_active"] for zone in zone_data),

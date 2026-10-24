@@ -60,6 +60,12 @@
     "switch": {
       "override": {
         "name": "Używaj własnej temperatury"
+      },
+      "limits_override": {
+        "name": "Używaj własnych progów wentylatora"
+      },
+      "quiet_enabled": {
+        "name": "Cisza nocna"
       }
     },
     "sensor": {
@@ -79,6 +85,45 @@
       },
       "water_temperature": {
         "name": "{zone} wygładzona temperatura wody"
+      },
+      "weighted_temperature": {
+        "name": "Średnia ważona temperatury pokoi"
+      },
+      "home_target": {
+        "name": "Temperatura docelowa domu"
+      },
+      "native_target": {
+        "name": "Nastawa temperatury miGo"
+      },
+      "native_correction": {
+        "name": "Korekta temperatury miGo"
+      },
+      "running_fans": {
+        "name": "Pracujące wentylatory"
+      },
+      "target_temperature": {
+        "name": "Efektywna temperatura docelowa"
+      },
+      "fan_speed": {
+        "name": "Zgłoszony bieg wentylatora",
+        "state": {
+          "off": "Wyłączony",
+          "low": "Niski",
+          "medium": "Średni",
+          "high": "Wysoki"
+        }
+      },
+      "fan_starts": {
+        "name": "Uruchomienia wentylatora"
+      },
+      "low_runtime": {
+        "name": "Czas pracy na niskim biegu"
+      },
+      "medium_runtime": {
+        "name": "Czas pracy na średnim biegu"
+      },
+      "average_temperature": {
+        "name": "Średnia temperatura pokoi"
       }
     }
   },
@@ -98,6 +143,27 @@
         "duration": {
           "name": "Czas obowiązywania",
           "description": "Wartości: 30 minutes, 1 hour, 2 hours lub Until cancelled."
+        }
+      }
+    },
+    "set_room_quiet_hours": {
+      "name": "Ustaw ciszę nocną w pokoju",
+      "description": "Ogranicza wentylator w trybie adaptacyjnym do niskich obrotów według czasu Home Assistant. Dni dotyczą początku ciszy nocnej.",
+      "fields": {
+        "entity_id": {
+          "name": "Termostat"
+        },
+        "enabled": {
+          "name": "Włączona"
+        },
+        "start": {
+          "name": "Początek (HH:MM)"
+        },
+        "end": {
+          "name": "Koniec (HH:MM)"
+        },
+        "days": {
+          "name": "Dni początku (poniedziałek 0–niedziela 6)"
         }
       }
     }
